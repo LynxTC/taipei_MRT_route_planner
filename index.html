@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>台北捷運最佳轉乘路徑規劃器</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: rgba(255,255,255,0.88); --ink: #1d2330; --muted: #6b7280;
+    --line: #e2e5ea; --accent: #0b6bcb; --shadow: 0 10px 30px rgba(20,30,50,.16);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink);
+    font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif; }
+  #map { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+  #map.dragging { cursor: grabbing; }
+  #map.hover { cursor: pointer; }
+  .card { position: absolute; top: 16px; left: 16px; width: 340px; max-height: calc(100% - 32px);
+    display: flex; flex-direction: column; background: var(--card); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,.7); border-radius: 16px;
+    box-shadow: var(--shadow); padding: 16px; z-index: 2; }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+  .head h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: .5px; }
+  .head h1 small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); letter-spacing: 0; margin-top: 2px; }
+  button { font: inherit; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 8px;
+    padding: 6px 12px; cursor: pointer; font-size: 13px; }
+  button:hover { background: #f0f3f7; }
+  .field { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; border: 3px solid; background: #fff; }
+  .dot.start { border-color: #16a34a; } .dot.end { border-color: #dc2626; }
+  .field label { font-size: 12px; color: var(--muted); width: 28px; flex: none; }
+  .field input { flex: 1; min-width: 0; font: inherit; font-size: 15px; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: #fff; outline: none; }
+  .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(11,107,203,.15); }
+  .field input:disabled { background: #eef0f3; color: #9aa1ab; cursor: not-allowed; }
+  .hint { font-size: 12px; color: var(--muted); margin: 4px 0 2px; min-height: 16px; }
+  #result { overflow-y: auto; margin-top: 6px; }
+  .total { display: flex; align-items: baseline; gap: 8px; padding: 12px 0 8px; border-top: 1px solid var(--line); }
+  .total .num { font-size: 32px; font-weight: 800; letter-spacing: -1px; }
+  .total .unit { font-size: 14px; color: var(--muted); }
+  .total .sub { margin-left: auto; font-size: 12px; color: var(--muted); text-align: right; line-height: 1.5; }
+  .steps { list-style: none; padding: 0; margin: 4px 0 0; }
+  .step { position: relative; padding: 6px 0 10px 26px; font-size: 13.5px; line-height: 1.55; }
+  .step::before { content: ""; position: absolute; left: 8px; top: 18px; bottom: -4px; width: 4px; border-radius: 2px; background: var(--c, #ccc); }
+  .step.walk::before { background: repeating-linear-gradient(to bottom, #9aa1ab 0 4px, transparent 4px 8px); width: 2px; left: 9px; }
+  .step:last-child::before { display: none; }
+  .step .ic { position: absolute; left: 3px; top: 8px; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 3px solid var(--c, #9aa1ab); }
+  .step.walk .ic { border-width: 2px; width: 12px; height: 12px; left: 4px; top: 9px; }
+  .step b { font-weight: 700; }
+  .pill { display: inline-block; color: #fff; font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 10px; margin: 0 2px; vertical-align: 1px; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .legend i { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
+  .zoom { position: absolute; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 2; }
+  .zoom button { width: 38px; height: 38px; padding: 0; font-size: 18px; background: var(--card); box-shadow: var(--shadow); }
+  .src { position: absolute; right: 64px; bottom: 18px; font-size: 11px; color: var(--muted); z-index: 1; }
+  @media (max-width: 720px) {
+    .card { left: 8px; right: 8px; top: 8px; width: auto; max-height: 52%; padding: 12px; }
+    .total .num { font-size: 26px; }
+    .legend { display: none; }
+    .src { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="map"></canvas>
+
+<div class="card" id="card">
+  <div class="head">
+    <h1>台北捷運 最佳轉乘路徑<small>點選地圖站點或輸入站名</small></h1>
+    <button id="resetBtn" type="button">重設</button>
+  </div>
+  <div class="field">
+    <span class="dot start"></span><label for="startInput">起點</label>
+    <input id="startInput" list="startList" placeholder="輸入或點選起站" autocomplete="off">
+  </div>
+  <div class="field">
+    <span class="dot end"></span><label for="endInput">終點</label>
+    <input id="endInput" list="endList" placeholder="請先選擇起站" autocomplete="off" disabled>
+  </div>
+  <datalist id="startList"></datalist>
+  <datalist id="endList"></datalist>
+  <div class="hint" id="hint"></div>
+  <div id="result"></div>
+  <div class="legend" id="legend"></div>
+</div>
+
+<div class="zoom">
+  <button type="button" id="zoomIn" aria-label="放大">＋</button>
+  <button type="button" id="zoomOut" aria-label="縮小">－</button>
+  <button type="button" id="zoomFit" aria-label="全圖" style="font-size:13px">全圖</button>
+</div>
+<div class="src">時間資料：臺北捷運公司 開放資料（站間行駛及停靠時間 1150830、轉乘步行時間）</div>
+
+<script>
+/* ===================================================================
+ * 1. 靜態資料（由官方開放資料轉換）
+ *    stationData   : 繪圖節點（拓撲網格座標 + 文字對齊）
+ *    serviceRoutes : 營運路線（判斷乘車方向）
+ *    graphEdges    : 圖的邊（ride 行車 / transfer 站內轉乘 / outside 站外轉乘 / virtual 0 分虛擬連線），權重單位：秒
+ *    renderMapping : 演算法節點 → UI 實體站點
+ *    segmentPaths  : 相鄰兩站間的繪圖折線（含轉角點）
+ * =================================================================== */
+const stationData = {"淡水":{"x":-10,"y":-16,"align":"right","baseline":"middle"},"復興崗":{"x":0,"y":-16,"align":"left","baseline":"bottom"},"北投":{"x":0,"y":-15,"align":"right","baseline":"middle"},"民權西路":{"x":0,"y":-6,"align":"right","baseline":"top"},"中山":{"x":0,"y":-3,"align":"right","baseline":"bottom"},"台北車站":{"x":0,"y":0,"align":"left","baseline":"bottom"},"中正紀念堂":{"x":0,"y":2,"align":"right","baseline":"top"},"東門":{"x":4,"y":2,"align":"left","baseline":"bottom"},"大安":{"x":6,"y":2,"align":"left","baseline":"bottom"},"廣慈/奉天宮":{"x":14,"y":2,"align":"left","baseline":"middle"},"新北投":{"x":2,"y":-15,"align":"left","baseline":"middle"},"府中":{"x":-13,"y":0,"align":"center","baseline":"bottom"},"頂埔":{"x":-18,"y":5,"align":"right","baseline":"middle"},"板橋":{"x":-11,"y":0,"align":"right","baseline":"top"},"新埔":{"x":-9,"y":0,"align":"left","baseline":"top"},"西門":{"x":-2,"y":0,"align":"right","baseline":"top"},"忠孝新生":{"x":4,"y":0,"align":"left","baseline":"bottom"},"忠孝復興":{"x":6,"y":0,"align":"left","baseline":"bottom"},"南港":{"x":20,"y":0,"align":"center","baseline":"top"},"南港展覽館":{"x":22,"y":-2,"align":"left","baseline":"middle"},"松山":{"x":12,"y":-3,"align":"left","baseline":"middle"},"南京復興":{"x":6,"y":-3,"align":"left","baseline":"bottom"},"松江南京":{"x":4,"y":-3,"align":"left","baseline":"bottom"},"北門":{"x":-2,"y":-1,"align":"right","baseline":"middle"},"小南門":{"x":-1,"y":1,"align":"right","baseline":"top"},"古亭":{"x":2,"y":4,"align":"left","baseline":"middle"},"大坪林":{"x":2,"y":12,"align":"left","baseline":"middle"},"七張":{"x":2,"y":14,"align":"left","baseline":"middle"},"新店":{"x":2,"y":16,"align":"left","baseline":"middle"},"小碧潭":{"x":0,"y":14,"align":"right","baseline":"middle"},"行天宮":{"x":4,"y":-6,"align":"center","baseline":"bottom"},"中山國小":{"x":2,"y":-6,"align":"center","baseline":"top"},"大橋頭":{"x":-3,"y":-6,"align":"right","baseline":"top"},"蘆洲":{"x":-8,"y":-11,"align":"right","baseline":"middle"},"迴龍":{"x":-18,"y":-1,"align":"right","baseline":"middle"},"頭前庄":{"x":-13,"y":-6,"align":"right","baseline":"middle"},"頂溪":{"x":0,"y":6,"align":"right","baseline":"middle"},"景安":{"x":-2,"y":8,"align":"right","baseline":"middle"},"南勢角":{"x":-2,"y":10,"align":"right","baseline":"middle"},"大直":{"x":6,"y":-9,"align":"right","baseline":"middle"},"葫洲":{"x":20,"y":-9,"align":"center","baseline":"bottom"},"麟光":{"x":6,"y":6,"align":"left","baseline":"middle"},"萬芳醫院":{"x":8,"y":8,"align":"left","baseline":"bottom"},"動物園":{"x":14,"y":8,"align":"center","baseline":"top"},"新北產業園區":{"x":-13,"y":-10,"align":"right","baseline":"middle"},"新埔民生":{"x":-9,"y":-2,"align":"left","baseline":"bottom"},"板新":{"x":-11,"y":2,"align":"right","baseline":"middle"},"紅樹林":{"x":-8.0,"y":-16.0,"align":"center","baseline":"bottom"},"竹圍":{"x":-6.0,"y":-16.0,"align":"center","baseline":"top"},"關渡":{"x":-4.0,"y":-16.0,"align":"center","baseline":"bottom"},"忠義":{"x":-2.0,"y":-16.0,"align":"center","baseline":"top"},"奇岩":{"x":0.0,"y":-14.0,"align":"left","baseline":"middle"},"唭哩岸":{"x":0.0,"y":-13.0,"align":"left","baseline":"middle"},"石牌":{"x":0.0,"y":-12.0,"align":"left","baseline":"middle"},"明德":{"x":0.0,"y":-11.0,"align":"left","baseline":"middle"},"芝山":{"x":0.0,"y":-10.0,"align":"left","baseline":"middle"},"士林":{"x":0.0,"y":-9.0,"align":"left","baseline":"middle"},"劍潭":{"x":0.0,"y":-8.0,"align":"left","baseline":"middle"},"圓山":{"x":0.0,"y":-7.0,"align":"left","baseline":"middle"},"雙連":{"x":0.0,"y":-4.5,"align":"left","baseline":"middle"},"台大醫院":{"x":0.0,"y":1.0,"align":"left","baseline":"middle"},"大安森林公園":{"x":5.0,"y":2.0,"align":"center","baseline":"top"},"信義安和":{"x":8.0,"y":2.0,"align":"center","baseline":"top"},"台北101/世貿":{"x":10.0,"y":2.0,"align":"center","baseline":"bottom"},"象山":{"x":12.0,"y":2.0,"align":"center","baseline":"top"},"南京三民":{"x":10.0,"y":-3.0,"align":"center","baseline":"bottom"},"台北小巨蛋":{"x":8.0,"y":-3.0,"align":"center","baseline":"top"},"台電大樓":{"x":2.0,"y":5.6,"align":"left","baseline":"middle"},"公館":{"x":2.0,"y":7.2,"align":"left","baseline":"middle"},"萬隆":{"x":2.0,"y":8.8,"align":"left","baseline":"middle"},"景美":{"x":2.0,"y":10.4,"align":"left","baseline":"middle"},"新店區公所":{"x":2.0,"y":15.0,"align":"left","baseline":"middle"},"昆陽":{"x":18.0,"y":0.0,"align":"center","baseline":"bottom"},"後山埤":{"x":16.0,"y":0.0,"align":"center","baseline":"top"},"永春":{"x":14.0,"y":0.0,"align":"center","baseline":"bottom"},"市政府":{"x":12.0,"y":0.0,"align":"center","baseline":"top"},"國父紀念館":{"x":10.0,"y":0.0,"align":"center","baseline":"bottom"},"忠孝敦化":{"x":8.0,"y":0.0,"align":"center","baseline":"top"},"善導寺":{"x":2.0,"y":0.0,"align":"center","baseline":"top"},"龍山寺":{"x":-4.333,"y":0.0,"align":"center","baseline":"top"},"江子翠":{"x":-6.667,"y":0.0,"align":"center","baseline":"top"},"亞東醫院":{"x":-14.0,"y":1.0,"align":"right","baseline":"middle"},"海山":{"x":-15.0,"y":2.0,"align":"right","baseline":"middle"},"土城":{"x":-16.0,"y":3.0,"align":"right","baseline":"middle"},"永寧":{"x":-17.0,"y":4.0,"align":"right","baseline":"middle"},"南港軟體園區":{"x":22.0,"y":-4.609,"align":"left","baseline":"middle"},"東湖":{"x":21.845,"y":-7.155,"align":"left","baseline":"middle"},"大湖公園":{"x":18.0,"y":-9.0,"align":"center","baseline":"top"},"內湖":{"x":16.0,"y":-9.0,"align":"center","baseline":"bottom"},"文德":{"x":14.0,"y":-9.0,"align":"center","baseline":"top"},"港墘":{"x":12.0,"y":-9.0,"align":"center","baseline":"bottom"},"西湖":{"x":10.0,"y":-9.0,"align":"center","baseline":"top"},"劍南路":{"x":8.0,"y":-9.0,"align":"center","baseline":"bottom"},"松山機場":{"x":6.0,"y":-7.0,"align":"left","baseline":"middle"},"中山國中":{"x":6.0,"y":-5.0,"align":"left","baseline":"middle"},"科技大樓":{"x":6.0,"y":3.333,"align":"left","baseline":"middle"},"六張犁":{"x":6.0,"y":4.667,"align":"left","baseline":"middle"},"辛亥":{"x":7.0,"y":7.0,"align":"left","baseline":"bottom"},"萬芳社區":{"x":10.0,"y":8.0,"align":"center","baseline":"top"},"木柵":{"x":12.0,"y":8.0,"align":"center","baseline":"bottom"},"三民高中":{"x":-7.0,"y":-10.0,"align":"left","baseline":"middle"},"徐匯中學":{"x":-6.0,"y":-9.0,"align":"left","baseline":"middle"},"三和國中":{"x":-5.0,"y":-8.0,"align":"left","baseline":"middle"},"三重國小":{"x":-4.0,"y":-7.0,"align":"left","baseline":"middle"},"永安市場":{"x":-1.0,"y":7.0,"align":"right","baseline":"middle"},"丹鳳":{"x":-16.75,"y":-2.25,"align":"right","baseline":"middle"},"輔大":{"x":-15.5,"y":-3.5,"align":"right","baseline":"middle"},"新莊":{"x":-14.25,"y":-4.75,"align":"right","baseline":"middle"},"先嗇宮":{"x":-11.0,"y":-6.0,"align":"center","baseline":"bottom"},"三重":{"x":-9.0,"y":-6.0,"align":"center","baseline":"bottom"},"菜寮":{"x":-7.0,"y":-6.0,"align":"center","baseline":"bottom"},"台北橋":{"x":-5.0,"y":-6.0,"align":"center","baseline":"bottom"},"幸福":{"x":-13.0,"y":-8.0,"align":"right","baseline":"middle"},"中原":{"x":-8.97,"y":4.03,"align":"left","baseline":"bottom"},"橋和":{"x":-6.939,"y":6.061,"align":"left","baseline":"bottom"},"中和":{"x":-4.871,"y":8.0,"align":"left","baseline":"bottom"},"景平":{"x":-1.0,"y":9.0,"align":"left","baseline":"bottom"},"秀朗橋":{"x":0.0,"y":10.0,"align":"right","baseline":"top"},"十四張":{"x":1.0,"y":11.0,"align":"right","baseline":"top"}};
+const serviceRoutes = [{"line":"R","stations":["淡水","紅樹林","竹圍","關渡","忠義","復興崗","北投","奇岩","唭哩岸","石牌","明德","芝山","士林","劍潭","圓山","民權西路","雙連","中山","台北車站","台大醫院","中正紀念堂","東門","大安森林公園","大安","信義安和","台北101/世貿","象山","廣慈/奉天宮"]},{"line":"G","stations":["松山","南京三民","台北小巨蛋","南京復興","松江南京","中山","北門","西門","小南門","中正紀念堂","古亭","台電大樓","公館","萬隆","景美","大坪林","七張","新店區公所","新店"]},{"line":"GX","stations":["七張","小碧潭"]},{"line":"RN","stations":["北投","新北投"]},{"line":"BL","stations":["南港展覽館","南港","昆陽","後山埤","永春","市政府","國父紀念館","忠孝敦化","忠孝復興","忠孝新生","善導寺","台北車站","西門","龍山寺","江子翠","新埔","板橋","府中","亞東醫院","海山","土城","永寧","頂埔"]},{"line":"BR","stations":["南港展覽館","南港軟體園區","東湖","葫洲","大湖公園","內湖","文德","港墘","西湖","劍南路","大直","松山機場","中山國中","南京復興","忠孝復興","大安","科技大樓","六張犁","麟光","辛亥","萬芳醫院","萬芳社區","木柵","動物園"]},{"line":"OL","stations":["蘆洲","三民高中","徐匯中學","三和國中","三重國小","大橋頭","民權西路","中山國小","行天宮","松江南京","忠孝新生","東門","古亭","頂溪","永安市場","景安","南勢角"]},{"line":"OX","stations":["迴龍","丹鳳","輔大","新莊","頭前庄","先嗇宮","三重","菜寮","台北橋","大橋頭","民權西路","中山國小","行天宮","松江南京","忠孝新生","東門","古亭","頂溪","永安市場","景安","南勢角"]},{"line":"Y","stations":["新北產業園區","幸福","頭前庄","新埔民生","板橋","板新","中原","橋和","中和","景安","景平","秀朗橋","十四張","大坪林"]}];
+const graphEdges = [{"source":"淡水|R","target":"紅樹林|R","weight":175,"type":"ride"},{"source":"紅樹林|R","target":"淡水|R","weight":175,"type":"ride"},{"source":"紅樹林|R","target":"竹圍|R","weight":169,"type":"ride"},{"source":"竹圍|R","target":"紅樹林|R","weight":169,"type":"ride"},{"source":"竹圍|R","target":"關渡|R","weight":177,"type":"ride"},{"source":"關渡|R","target":"竹圍|R","weight":177,"type":"ride"},{"source":"關渡|R","target":"忠義|R","weight":107,"type":"ride"},{"source":"忠義|R","target":"關渡|R","weight":107,"type":"ride"},{"source":"忠義|R","target":"復興崗|R","weight":144,"type":"ride"},{"source":"復興崗|R","target":"忠義|R","weight":144,"type":"ride"},{"source":"復興崗|R","target":"北投|R","weight":162,"type":"ride"},{"source":"北投|R","target":"復興崗|R","weight":162,"type":"ride"},{"source":"北投|R","target":"奇岩|R","weight":118,"type":"ride"},{"source":"奇岩|R","target":"北投|R","weight":118,"type":"ride"},{"source":"奇岩|R","target":"唭哩岸|R","weight":102,"type":"ride"},{"source":"唭哩岸|R","target":"奇岩|R","weight":102,"type":"ride"},{"source":"唭哩岸|R","target":"石牌|R","weight":136,"type":"ride"},{"source":"石牌|R","target":"唭哩岸|R","weight":136,"type":"ride"},{"source":"石牌|R","target":"明德|R","weight":90,"type":"ride"},{"source":"明德|R","target":"石牌|R","weight":90,"type":"ride"},{"source":"明德|R","target":"芝山|R","weight":106,"type":"ride"},{"source":"芝山|R","target":"明德|R","weight":106,"type":"ride"},{"source":"芝山|R","target":"士林|R","weight":121,"type":"ride"},{"source":"士林|R","target":"芝山|R","weight":121,"type":"ride"},{"source":"士林|R","target":"劍潭|R","weight":128,"type":"ride"},{"source":"劍潭|R","target":"士林|R","weight":128,"type":"ride"},{"source":"劍潭|R","target":"圓山|R","weight":141,"type":"ride"},{"source":"圓山|R","target":"劍潭|R","weight":141,"type":"ride"},{"source":"圓山|R","target":"民權西路|R","weight":117,"type":"ride"},{"source":"民權西路|R","target":"圓山|R","weight":117,"type":"ride"},{"source":"民權西路|R","target":"雙連|R","weight":90,"type":"ride"},{"source":"雙連|R","target":"民權西路|R","weight":90,"type":"ride"},{"source":"雙連|R","target":"中山|R","weight":92,"type":"ride"},{"source":"中山|R","target":"雙連|R","weight":92,"type":"ride"},{"source":"中山|R","target":"台北車站|R","weight":98,"type":"ride"},{"source":"台北車站|R","target":"中山|R","weight":98,"type":"ride"},{"source":"台北車站|R","target":"台大醫院|R","weight":102,"type":"ride"},{"source":"台大醫院|R","target":"台北車站|R","weight":102,"type":"ride"},{"source":"台大醫院|R","target":"中正紀念堂|R","weight":122,"type":"ride"},{"source":"中正紀念堂|R","target":"台大醫院|R","weight":122,"type":"ride"},{"source":"中正紀念堂|R","target":"東門|R","weight":205,"type":"ride"},{"source":"東門|R","target":"中正紀念堂|R","weight":205,"type":"ride"},{"source":"東門|R","target":"大安森林公園|R","weight":105,"type":"ride"},{"source":"大安森林公園|R","target":"東門|R","weight":105,"type":"ride"},{"source":"大安森林公園|R","target":"大安|R","weight":101,"type":"ride"},{"source":"大安|R","target":"大安森林公園|R","weight":101,"type":"ride"},{"source":"大安|R","target":"信義安和|R","weight":120,"type":"ride"},{"source":"信義安和|R","target":"大安|R","weight":120,"type":"ride"},{"source":"信義安和|R","target":"台北101/世貿|R","weight":110,"type":"ride"},{"source":"台北101/世貿|R","target":"信義安和|R","weight":110,"type":"ride"},{"source":"台北101/世貿|R","target":"象山|R","weight":96,"type":"ride"},{"source":"象山|R","target":"台北101/世貿|R","weight":96,"type":"ride"},{"source":"象山|R","target":"廣慈/奉天宮|R","weight":177,"type":"ride"},{"source":"廣慈/奉天宮|R","target":"象山|R","weight":177,"type":"ride"},{"source":"松山|G","target":"南京三民|G","weight":138,"type":"ride"},{"source":"南京三民|G","target":"松山|G","weight":138,"type":"ride"},{"source":"南京三民|G","target":"台北小巨蛋|G","weight":129,"type":"ride"},{"source":"台北小巨蛋|G","target":"南京三民|G","weight":129,"type":"ride"},{"source":"台北小巨蛋|G","target":"南京復興|G","weight":111,"type":"ride"},{"source":"南京復興|G","target":"台北小巨蛋|G","weight":111,"type":"ride"},{"source":"南京復興|G","target":"松江南京|G","weight":125,"type":"ride"},{"source":"松江南京|G","target":"南京復興|G","weight":125,"type":"ride"},{"source":"松江南京|G","target":"中山|G","weight":141,"type":"ride"},{"source":"中山|G","target":"松江南京|G","weight":141,"type":"ride"},{"source":"中山|G","target":"北門|G","weight":151,"type":"ride"},{"source":"北門|G","target":"中山|G","weight":151,"type":"ride"},{"source":"北門|G","target":"西門|G","weight":114,"type":"ride"},{"source":"西門|G","target":"北門|G","weight":114,"type":"ride"},{"source":"西門|G","target":"小南門|G","weight":117,"type":"ride"},{"source":"小南門|G","target":"西門|G","weight":117,"type":"ride"},{"source":"小南門|G","target":"中正紀念堂|G","weight":103,"type":"ride"},{"source":"中正紀念堂|G","target":"小南門|G","weight":103,"type":"ride"},{"source":"中正紀念堂|G","target":"古亭|G","weight":125,"type":"ride"},{"source":"古亭|G","target":"中正紀念堂|G","weight":125,"type":"ride"},{"source":"古亭|G","target":"台電大樓|G","weight":118,"type":"ride"},{"source":"台電大樓|G","target":"古亭|G","weight":118,"type":"ride"},{"source":"台電大樓|G","target":"公館|G","weight":109,"type":"ride"},{"source":"公館|G","target":"台電大樓|G","weight":109,"type":"ride"},{"source":"公館|G","target":"萬隆|G","weight":151,"type":"ride"},{"source":"萬隆|G","target":"公館|G","weight":151,"type":"ride"},{"source":"萬隆|G","target":"景美|G","weight":116,"type":"ride"},{"source":"景美|G","target":"萬隆|G","weight":116,"type":"ride"},{"source":"景美|G","target":"大坪林|G","weight":119,"type":"ride"},{"source":"大坪林|G","target":"景美|G","weight":119,"type":"ride"},{"source":"大坪林|G","target":"七張|G","weight":105,"type":"ride"},{"source":"七張|G","target":"大坪林|G","weight":105,"type":"ride"},{"source":"七張|G","target":"新店區公所|G","weight":105,"type":"ride"},{"source":"新店區公所|G","target":"七張|G","weight":105,"type":"ride"},{"source":"新店區公所|G","target":"新店|G","weight":136,"type":"ride"},{"source":"新店|G","target":"新店區公所|G","weight":136,"type":"ride"},{"source":"七張|GX","target":"小碧潭|GX","weight":203,"type":"ride"},{"source":"小碧潭|GX","target":"七張|GX","weight":203,"type":"ride"},{"source":"北投|RN","target":"新北投|RN","weight":157,"type":"ride"},{"source":"新北投|RN","target":"北投|RN","weight":157,"type":"ride"},{"source":"南港展覽館|BL","target":"南港|BL","weight":112,"type":"ride"},{"source":"南港|BL","target":"南港展覽館|BL","weight":112,"type":"ride"},{"source":"南港|BL","target":"昆陽|BL","weight":133,"type":"ride"},{"source":"昆陽|BL","target":"南港|BL","weight":133,"type":"ride"},{"source":"昆陽|BL","target":"後山埤|BL","weight":132,"type":"ride"},{"source":"後山埤|BL","target":"昆陽|BL","weight":132,"type":"ride"},{"source":"後山埤|BL","target":"永春|BL","weight":105,"type":"ride"},{"source":"永春|BL","target":"後山埤|BL","weight":105,"type":"ride"},{"source":"永春|BL","target":"市政府|BL","weight":112,"type":"ride"},{"source":"市政府|BL","target":"永春|BL","weight":112,"type":"ride"},{"source":"市政府|BL","target":"國父紀念館|BL","weight":105,"type":"ride"},{"source":"國父紀念館|BL","target":"市政府|BL","weight":105,"type":"ride"},{"source":"國父紀念館|BL","target":"忠孝敦化|BL","weight":99,"type":"ride"},{"source":"忠孝敦化|BL","target":"國父紀念館|BL","weight":99,"type":"ride"},{"source":"忠孝敦化|BL","target":"忠孝復興|BL","weight":93,"type":"ride"},{"source":"忠孝復興|BL","target":"忠孝敦化|BL","weight":93,"type":"ride"},{"source":"忠孝復興|BL","target":"忠孝新生|BL","weight":130,"type":"ride"},{"source":"忠孝新生|BL","target":"忠孝復興|BL","weight":130,"type":"ride"},{"source":"忠孝新生|BL","target":"善導寺|BL","weight":121,"type":"ride"},{"source":"善導寺|BL","target":"忠孝新生|BL","weight":121,"type":"ride"},{"source":"善導寺|BL","target":"台北車站|BL","weight":91,"type":"ride"},{"source":"台北車站|BL","target":"善導寺|BL","weight":91,"type":"ride"},{"source":"台北車站|BL","target":"西門|BL","weight":162,"type":"ride"},{"source":"西門|BL","target":"台北車站|BL","weight":162,"type":"ride"},{"source":"西門|BL","target":"龍山寺|BL","weight":145,"type":"ride"},{"source":"龍山寺|BL","target":"西門|BL","weight":145,"type":"ride"},{"source":"龍山寺|BL","target":"江子翠|BL","weight":221,"type":"ride"},{"source":"江子翠|BL","target":"龍山寺|BL","weight":221,"type":"ride"},{"source":"江子翠|BL","target":"新埔|BL","weight":105,"type":"ride"},{"source":"新埔|BL","target":"江子翠|BL","weight":105,"type":"ride"},{"source":"新埔|BL","target":"板橋|BL","weight":135,"type":"ride"},{"source":"板橋|BL","target":"新埔|BL","weight":135,"type":"ride"},{"source":"板橋|BL","target":"府中|BL","weight":95,"type":"ride"},{"source":"府中|BL","target":"板橋|BL","weight":95,"type":"ride"},{"source":"府中|BL","target":"亞東醫院|BL","weight":130,"type":"ride"},{"source":"亞東醫院|BL","target":"府中|BL","weight":130,"type":"ride"},{"source":"亞東醫院|BL","target":"海山|BL","weight":168,"type":"ride"},{"source":"海山|BL","target":"亞東醫院|BL","weight":168,"type":"ride"},{"source":"海山|BL","target":"土城|BL","weight":132,"type":"ride"},{"source":"土城|BL","target":"海山|BL","weight":132,"type":"ride"},{"source":"土城|BL","target":"永寧|BL","weight":121,"type":"ride"},{"source":"永寧|BL","target":"土城|BL","weight":121,"type":"ride"},{"source":"永寧|BL","target":"頂埔|BL","weight":208,"type":"ride"},{"source":"頂埔|BL","target":"永寧|BL","weight":208,"type":"ride"},{"source":"南港展覽館|BR","target":"南港軟體園區|BR","weight":78,"type":"ride"},{"source":"南港軟體園區|BR","target":"南港展覽館|BR","weight":78,"type":"ride"},{"source":"南港軟體園區|BR","target":"東湖|BR","weight":110,"type":"ride"},{"source":"東湖|BR","target":"南港軟體園區|BR","weight":110,"type":"ride"},{"source":"東湖|BR","target":"葫洲|BR","weight":103,"type":"ride"},{"source":"葫洲|BR","target":"東湖|BR","weight":103,"type":"ride"},{"source":"葫洲|BR","target":"大湖公園|BR","weight":146,"type":"ride"},{"source":"大湖公園|BR","target":"葫洲|BR","weight":146,"type":"ride"},{"source":"大湖公園|BR","target":"內湖|BR","weight":96,"type":"ride"},{"source":"內湖|BR","target":"大湖公園|BR","weight":96,"type":"ride"},{"source":"內湖|BR","target":"文德|BR","weight":103,"type":"ride"},{"source":"文德|BR","target":"內湖|BR","weight":103,"type":"ride"},{"source":"文德|BR","target":"港墘|BR","weight":97,"type":"ride"},{"source":"港墘|BR","target":"文德|BR","weight":97,"type":"ride"},{"source":"港墘|BR","target":"西湖|BR","weight":90,"type":"ride"},{"source":"西湖|BR","target":"港墘|BR","weight":90,"type":"ride"},{"source":"西湖|BR","target":"劍南路|BR","weight":135,"type":"ride"},{"source":"劍南路|BR","target":"西湖|BR","weight":135,"type":"ride"},{"source":"劍南路|BR","target":"大直|BR","weight":129,"type":"ride"},{"source":"大直|BR","target":"劍南路|BR","weight":129,"type":"ride"},{"source":"大直|BR","target":"松山機場|BR","weight":197,"type":"ride"},{"source":"松山機場|BR","target":"大直|BR","weight":197,"type":"ride"},{"source":"松山機場|BR","target":"中山國中|BR","weight":192,"type":"ride"},{"source":"中山國中|BR","target":"松山機場|BR","weight":192,"type":"ride"},{"source":"中山國中|BR","target":"南京復興|BR","weight":96,"type":"ride"},{"source":"南京復興|BR","target":"中山國中|BR","weight":96,"type":"ride"},{"source":"南京復興|BR","target":"忠孝復興|BR","weight":121,"type":"ride"},{"source":"忠孝復興|BR","target":"南京復興|BR","weight":121,"type":"ride"},{"source":"忠孝復興|BR","target":"大安|BR","weight":112,"type":"ride"},{"source":"大安|BR","target":"忠孝復興|BR","weight":112,"type":"ride"},{"source":"大安|BR","target":"科技大樓|BR","weight":104,"type":"ride"},{"source":"科技大樓|BR","target":"大安|BR","weight":104,"type":"ride"},{"source":"科技大樓|BR","target":"六張犁|BR","weight":147,"type":"ride"},{"source":"六張犁|BR","target":"科技大樓|BR","weight":147,"type":"ride"},{"source":"六張犁|BR","target":"麟光|BR","weight":97,"type":"ride"},{"source":"麟光|BR","target":"六張犁|BR","weight":97,"type":"ride"},{"source":"麟光|BR","target":"辛亥|BR","weight":166,"type":"ride"},{"source":"辛亥|BR","target":"麟光|BR","weight":166,"type":"ride"},{"source":"辛亥|BR","target":"萬芳醫院|BR","weight":131,"type":"ride"},{"source":"萬芳醫院|BR","target":"辛亥|BR","weight":131,"type":"ride"},{"source":"萬芳醫院|BR","target":"萬芳社區|BR","weight":124,"type":"ride"},{"source":"萬芳社區|BR","target":"萬芳醫院|BR","weight":124,"type":"ride"},{"source":"萬芳社區|BR","target":"木柵|BR","weight":72,"type":"ride"},{"source":"木柵|BR","target":"萬芳社區|BR","weight":72,"type":"ride"},{"source":"木柵|BR","target":"動物園|BR","weight":92,"type":"ride"},{"source":"動物園|BR","target":"木柵|BR","weight":92,"type":"ride"},{"source":"蘆洲|OL","target":"三民高中|OL","weight":111,"type":"ride"},{"source":"三民高中|OL","target":"蘆洲|OL","weight":111,"type":"ride"},{"source":"三民高中|OL","target":"徐匯中學|OL","weight":117,"type":"ride"},{"source":"徐匯中學|OL","target":"三民高中|OL","weight":117,"type":"ride"},{"source":"徐匯中學|OL","target":"三和國中|OL","weight":107,"type":"ride"},{"source":"三和國中|OL","target":"徐匯中學|OL","weight":107,"type":"ride"},{"source":"三和國中|OL","target":"三重國小|OL","weight":132,"type":"ride"},{"source":"三重國小|OL","target":"三和國中|OL","weight":132,"type":"ride"},{"source":"三重國小|OL","target":"大橋頭|OL","weight":176,"type":"ride"},{"source":"大橋頭|OL","target":"三重國小|OL","weight":176,"type":"ride"},{"source":"大橋頭|OL","target":"民權西路|OL","weight":98,"type":"ride"},{"source":"民權西路|OL","target":"大橋頭|OL","weight":98,"type":"ride"},{"source":"民權西路|OL","target":"中山國小|OL","weight":105,"type":"ride"},{"source":"中山國小|OL","target":"民權西路|OL","weight":105,"type":"ride"},{"source":"中山國小|OL","target":"行天宮|OL","weight":126,"type":"ride"},{"source":"行天宮|OL","target":"中山國小|OL","weight":126,"type":"ride"},{"source":"行天宮|OL","target":"松江南京|OL","weight":108,"type":"ride"},{"source":"松江南京|OL","target":"行天宮|OL","weight":108,"type":"ride"},{"source":"松江南京|OL","target":"忠孝新生|OL","weight":132,"type":"ride"},{"source":"忠孝新生|OL","target":"松江南京|OL","weight":132,"type":"ride"},{"source":"忠孝新生|OL","target":"東門|OL","weight":174,"type":"ride"},{"source":"東門|OL","target":"忠孝新生|OL","weight":174,"type":"ride"},{"source":"東門|OL","target":"古亭|OL","weight":241,"type":"ride"},{"source":"古亭|OL","target":"東門|OL","weight":241,"type":"ride"},{"source":"古亭|OL","target":"頂溪|OL","weight":220,"type":"ride"},{"source":"頂溪|OL","target":"古亭|OL","weight":220,"type":"ride"},{"source":"頂溪|OL","target":"永安市場|OL","weight":132,"type":"ride"},{"source":"永安市場|OL","target":"頂溪|OL","weight":132,"type":"ride"},{"source":"永安市場|OL","target":"景安|OL","weight":119,"type":"ride"},{"source":"景安|OL","target":"永安市場|OL","weight":119,"type":"ride"},{"source":"景安|OL","target":"南勢角|OL","weight":125,"type":"ride"},{"source":"南勢角|OL","target":"景安|OL","weight":125,"type":"ride"},{"source":"迴龍|OX","target":"丹鳳|OX","weight":168,"type":"ride"},{"source":"丹鳳|OX","target":"迴龍|OX","weight":168,"type":"ride"},{"source":"丹鳳|OX","target":"輔大|OX","weight":138,"type":"ride"},{"source":"輔大|OX","target":"丹鳳|OX","weight":138,"type":"ride"},{"source":"輔大|OX","target":"新莊|OX","weight":162,"type":"ride"},{"source":"新莊|OX","target":"輔大|OX","weight":162,"type":"ride"},{"source":"新莊|OX","target":"頭前庄|OX","weight":119,"type":"ride"},{"source":"頭前庄|OX","target":"新莊|OX","weight":119,"type":"ride"},{"source":"頭前庄|OX","target":"先嗇宮|OX","weight":133,"type":"ride"},{"source":"先嗇宮|OX","target":"頭前庄|OX","weight":133,"type":"ride"},{"source":"先嗇宮|OX","target":"三重|OX","weight":167,"type":"ride"},{"source":"三重|OX","target":"先嗇宮|OX","weight":167,"type":"ride"},{"source":"三重|OX","target":"菜寮|OX","weight":109,"type":"ride"},{"source":"菜寮|OX","target":"三重|OX","weight":109,"type":"ride"},{"source":"菜寮|OX","target":"台北橋|OX","weight":122,"type":"ride"},{"source":"台北橋|OX","target":"菜寮|OX","weight":122,"type":"ride"},{"source":"台北橋|OX","target":"大橋頭|OX","weight":152,"type":"ride"},{"source":"大橋頭|OX","target":"台北橋|OX","weight":152,"type":"ride"},{"source":"大橋頭|OX","target":"民權西路|OX","weight":98,"type":"ride"},{"source":"民權西路|OX","target":"大橋頭|OX","weight":98,"type":"ride"},{"source":"民權西路|OX","target":"中山國小|OX","weight":105,"type":"ride"},{"source":"中山國小|OX","target":"民權西路|OX","weight":105,"type":"ride"},{"source":"中山國小|OX","target":"行天宮|OX","weight":126,"type":"ride"},{"source":"行天宮|OX","target":"中山國小|OX","weight":126,"type":"ride"},{"source":"行天宮|OX","target":"松江南京|OX","weight":108,"type":"ride"},{"source":"松江南京|OX","target":"行天宮|OX","weight":108,"type":"ride"},{"source":"松江南京|OX","target":"忠孝新生|OX","weight":132,"type":"ride"},{"source":"忠孝新生|OX","target":"松江南京|OX","weight":132,"type":"ride"},{"source":"忠孝新生|OX","target":"東門|OX","weight":174,"type":"ride"},{"source":"東門|OX","target":"忠孝新生|OX","weight":174,"type":"ride"},{"source":"東門|OX","target":"古亭|OX","weight":241,"type":"ride"},{"source":"古亭|OX","target":"東門|OX","weight":241,"type":"ride"},{"source":"古亭|OX","target":"頂溪|OX","weight":220,"type":"ride"},{"source":"頂溪|OX","target":"古亭|OX","weight":220,"type":"ride"},{"source":"頂溪|OX","target":"永安市場|OX","weight":132,"type":"ride"},{"source":"永安市場|OX","target":"頂溪|OX","weight":132,"type":"ride"},{"source":"永安市場|OX","target":"景安|OX","weight":119,"type":"ride"},{"source":"景安|OX","target":"永安市場|OX","weight":119,"type":"ride"},{"source":"景安|OX","target":"南勢角|OX","weight":125,"type":"ride"},{"source":"南勢角|OX","target":"景安|OX","weight":125,"type":"ride"},{"source":"新北產業園區|Y","target":"幸福|Y","weight":135,"type":"ride"},{"source":"幸福|Y","target":"新北產業園區|Y","weight":135,"type":"ride"},{"source":"幸福|Y","target":"頭前庄|Y","weight":118,"type":"ride"},{"source":"頭前庄|Y","target":"幸福|Y","weight":118,"type":"ride"},{"source":"頭前庄|Y","target":"新埔民生|Y","weight":178,"type":"ride"},{"source":"新埔民生|Y","target":"頭前庄|Y","weight":178,"type":"ride"},{"source":"新埔民生|Y","target":"板橋|Y","weight":216,"type":"ride"},{"source":"板橋|Y","target":"新埔民生|Y","weight":216,"type":"ride"},{"source":"板橋|Y","target":"板新|Y","weight":193,"type":"ride"},{"source":"板新|Y","target":"板橋|Y","weight":193,"type":"ride"},{"source":"板新|Y","target":"中原|Y","weight":136,"type":"ride"},{"source":"中原|Y","target":"板新|Y","weight":136,"type":"ride"},{"source":"中原|Y","target":"橋和|Y","weight":97,"type":"ride"},{"source":"橋和|Y","target":"中原|Y","weight":97,"type":"ride"},{"source":"橋和|Y","target":"中和|Y","weight":129,"type":"ride"},{"source":"中和|Y","target":"橋和|Y","weight":129,"type":"ride"},{"source":"中和|Y","target":"景安|Y","weight":219,"type":"ride"},{"source":"景安|Y","target":"中和|Y","weight":219,"type":"ride"},{"source":"景安|Y","target":"景平|Y","weight":119,"type":"ride"},{"source":"景平|Y","target":"景安|Y","weight":119,"type":"ride"},{"source":"景平|Y","target":"秀朗橋|Y","weight":104,"type":"ride"},{"source":"秀朗橋|Y","target":"景平|Y","weight":104,"type":"ride"},{"source":"秀朗橋|Y","target":"十四張|Y","weight":134,"type":"ride"},{"source":"十四張|Y","target":"秀朗橋|Y","weight":134,"type":"ride"},{"source":"十四張|Y","target":"大坪林|Y","weight":168,"type":"ride"},{"source":"大坪林|Y","target":"十四張|Y","weight":168,"type":"ride"},{"source":"淡水","target":"淡水|R","weight":0,"type":"virtual"},{"source":"淡水|R","target":"淡水","weight":0,"type":"virtual"},{"source":"紅樹林","target":"紅樹林|R","weight":0,"type":"virtual"},{"source":"紅樹林|R","target":"紅樹林","weight":0,"type":"virtual"},{"source":"竹圍","target":"竹圍|R","weight":0,"type":"virtual"},{"source":"竹圍|R","target":"竹圍","weight":0,"type":"virtual"},{"source":"關渡","target":"關渡|R","weight":0,"type":"virtual"},{"source":"關渡|R","target":"關渡","weight":0,"type":"virtual"},{"source":"忠義","target":"忠義|R","weight":0,"type":"virtual"},{"source":"忠義|R","target":"忠義","weight":0,"type":"virtual"},{"source":"復興崗","target":"復興崗|R","weight":0,"type":"virtual"},{"source":"復興崗|R","target":"復興崗","weight":0,"type":"virtual"},{"source":"北投","target":"北投|R","weight":0,"type":"virtual"},{"source":"北投|R","target":"北投","weight":0,"type":"virtual"},{"source":"北投","target":"北投|RN","weight":0,"type":"virtual"},{"source":"北投|RN","target":"北投","weight":0,"type":"virtual"},{"source":"北投|R","target":"北投|RN","weight":180,"type":"transfer"},{"source":"北投|RN","target":"北投|R","weight":180,"type":"transfer"},{"source":"奇岩","target":"奇岩|R","weight":0,"type":"virtual"},{"source":"奇岩|R","target":"奇岩","weight":0,"type":"virtual"},{"source":"唭哩岸","target":"唭哩岸|R","weight":0,"type":"virtual"},{"source":"唭哩岸|R","target":"唭哩岸","weight":0,"type":"virtual"},{"source":"石牌","target":"石牌|R","weight":0,"type":"virtual"},{"source":"石牌|R","target":"石牌","weight":0,"type":"virtual"},{"source":"明德","target":"明德|R","weight":0,"type":"virtual"},{"source":"明德|R","target":"明德","weight":0,"type":"virtual"},{"source":"芝山","target":"芝山|R","weight":0,"type":"virtual"},{"source":"芝山|R","target":"芝山","weight":0,"type":"virtual"},{"source":"士林","target":"士林|R","weight":0,"type":"virtual"},{"source":"士林|R","target":"士林","weight":0,"type":"virtual"},{"source":"劍潭","target":"劍潭|R","weight":0,"type":"virtual"},{"source":"劍潭|R","target":"劍潭","weight":0,"type":"virtual"},{"source":"圓山","target":"圓山|R","weight":0,"type":"virtual"},{"source":"圓山|R","target":"圓山","weight":0,"type":"virtual"},{"source":"民權西路","target":"民權西路|OL","weight":0,"type":"virtual"},{"source":"民權西路|OL","target":"民權西路","weight":0,"type":"virtual"},{"source":"民權西路","target":"民權西路|OX","weight":0,"type":"virtual"},{"source":"民權西路|OX","target":"民權西路","weight":0,"type":"virtual"},{"source":"民權西路","target":"民權西路|R","weight":0,"type":"virtual"},{"source":"民權西路|R","target":"民權西路","weight":0,"type":"virtual"},{"source":"民權西路|OL","target":"民權西路|R","weight":180,"type":"transfer"},{"source":"民權西路|R","target":"民權西路|OL","weight":180,"type":"transfer"},{"source":"民權西路|OX","target":"民權西路|R","weight":180,"type":"transfer"},{"source":"民權西路|R","target":"民權西路|OX","weight":180,"type":"transfer"},{"source":"雙連","target":"雙連|R","weight":0,"type":"virtual"},{"source":"雙連|R","target":"雙連","weight":0,"type":"virtual"},{"source":"中山","target":"中山|G","weight":0,"type":"virtual"},{"source":"中山|G","target":"中山","weight":0,"type":"virtual"},{"source":"中山","target":"中山|R","weight":0,"type":"virtual"},{"source":"中山|R","target":"中山","weight":0,"type":"virtual"},{"source":"中山|G","target":"中山|R","weight":180,"type":"transfer"},{"source":"中山|R","target":"中山|G","weight":180,"type":"transfer"},{"source":"台北車站","target":"台北車站|BL","weight":0,"type":"virtual"},{"source":"台北車站|BL","target":"台北車站","weight":0,"type":"virtual"},{"source":"台北車站","target":"台北車站|R","weight":0,"type":"virtual"},{"source":"台北車站|R","target":"台北車站","weight":0,"type":"virtual"},{"source":"台北車站|BL","target":"台北車站|R","weight":240,"type":"transfer"},{"source":"台北車站|R","target":"台北車站|BL","weight":240,"type":"transfer"},{"source":"台大醫院","target":"台大醫院|R","weight":0,"type":"virtual"},{"source":"台大醫院|R","target":"台大醫院","weight":0,"type":"virtual"},{"source":"中正紀念堂","target":"中正紀念堂|G","weight":0,"type":"virtual"},{"source":"中正紀念堂|G","target":"中正紀念堂","weight":0,"type":"virtual"},{"source":"中正紀念堂","target":"中正紀念堂|R","weight":0,"type":"virtual"},{"source":"中正紀念堂|R","target":"中正紀念堂","weight":0,"type":"virtual"},{"source":"中正紀念堂|G","target":"中正紀念堂|R","weight":120,"type":"transfer"},{"source":"中正紀念堂|R","target":"中正紀念堂|G","weight":120,"type":"transfer"},{"source":"東門","target":"東門|OL","weight":0,"type":"virtual"},{"source":"東門|OL","target":"東門","weight":0,"type":"virtual"},{"source":"東門","target":"東門|OX","weight":0,"type":"virtual"},{"source":"東門|OX","target":"東門","weight":0,"type":"virtual"},{"source":"東門","target":"東門|R","weight":0,"type":"virtual"},{"source":"東門|R","target":"東門","weight":0,"type":"virtual"},{"source":"東門|OL","target":"東門|R","weight":120,"type":"transfer"},{"source":"東門|R","target":"東門|OL","weight":120,"type":"transfer"},{"source":"東門|OX","target":"東門|R","weight":120,"type":"transfer"},{"source":"東門|R","target":"東門|OX","weight":120,"type":"transfer"},{"source":"大安森林公園","target":"大安森林公園|R","weight":0,"type":"virtual"},{"source":"大安森林公園|R","target":"大安森林公園","weight":0,"type":"virtual"},{"source":"大安","target":"大安|BR","weight":0,"type":"virtual"},{"source":"大安|BR","target":"大安","weight":0,"type":"virtual"},{"source":"大安","target":"大安|R","weight":0,"type":"virtual"},{"source":"大安|R","target":"大安","weight":0,"type":"virtual"},{"source":"大安|BR","target":"大安|R","weight":300,"type":"transfer"},{"source":"大安|R","target":"大安|BR","weight":300,"type":"transfer"},{"source":"信義安和","target":"信義安和|R","weight":0,"type":"virtual"},{"source":"信義安和|R","target":"信義安和","weight":0,"type":"virtual"},{"source":"台北101/世貿","target":"台北101/世貿|R","weight":0,"type":"virtual"},{"source":"台北101/世貿|R","target":"台北101/世貿","weight":0,"type":"virtual"},{"source":"象山","target":"象山|R","weight":0,"type":"virtual"},{"source":"象山|R","target":"象山","weight":0,"type":"virtual"},{"source":"廣慈/奉天宮","target":"廣慈/奉天宮|R","weight":0,"type":"virtual"},{"source":"廣慈/奉天宮|R","target":"廣慈/奉天宮","weight":0,"type":"virtual"},{"source":"松山","target":"松山|G","weight":0,"type":"virtual"},{"source":"松山|G","target":"松山","weight":0,"type":"virtual"},{"source":"南京三民","target":"南京三民|G","weight":0,"type":"virtual"},{"source":"南京三民|G","target":"南京三民","weight":0,"type":"virtual"},{"source":"台北小巨蛋","target":"台北小巨蛋|G","weight":0,"type":"virtual"},{"source":"台北小巨蛋|G","target":"台北小巨蛋","weight":0,"type":"virtual"},{"source":"南京復興","target":"南京復興|BR","weight":0,"type":"virtual"},{"source":"南京復興|BR","target":"南京復興","weight":0,"type":"virtual"},{"source":"南京復興","target":"南京復興|G","weight":0,"type":"virtual"},{"source":"南京復興|G","target":"南京復興","weight":0,"type":"virtual"},{"source":"南京復興|BR","target":"南京復興|G","weight":300,"type":"transfer"},{"source":"南京復興|G","target":"南京復興|BR","weight":300,"type":"transfer"},{"source":"松江南京","target":"松江南京|G","weight":0,"type":"virtual"},{"source":"松江南京|G","target":"松江南京","weight":0,"type":"virtual"},{"source":"松江南京","target":"松江南京|OL","weight":0,"type":"virtual"},{"source":"松江南京|OL","target":"松江南京","weight":0,"type":"virtual"},{"source":"松江南京","target":"松江南京|OX","weight":0,"type":"virtual"},{"source":"松江南京|OX","target":"松江南京","weight":0,"type":"virtual"},{"source":"松江南京|G","target":"松江南京|OL","weight":120,"type":"transfer"},{"source":"松江南京|OL","target":"松江南京|G","weight":120,"type":"transfer"},{"source":"松江南京|G","target":"松江南京|OX","weight":120,"type":"transfer"},{"source":"松江南京|OX","target":"松江南京|G","weight":120,"type":"transfer"},{"source":"北門","target":"北門|G","weight":0,"type":"virtual"},{"source":"北門|G","target":"北門","weight":0,"type":"virtual"},{"source":"西門","target":"西門|BL","weight":0,"type":"virtual"},{"source":"西門|BL","target":"西門","weight":0,"type":"virtual"},{"source":"西門","target":"西門|G","weight":0,"type":"virtual"},{"source":"西門|G","target":"西門","weight":0,"type":"virtual"},{"source":"西門|BL","target":"西門|G","weight":120,"type":"transfer"},{"source":"西門|G","target":"西門|BL","weight":120,"type":"transfer"},{"source":"小南門","target":"小南門|G","weight":0,"type":"virtual"},{"source":"小南門|G","target":"小南門","weight":0,"type":"virtual"},{"source":"古亭","target":"古亭|G","weight":0,"type":"virtual"},{"source":"古亭|G","target":"古亭","weight":0,"type":"virtual"},{"source":"古亭","target":"古亭|OL","weight":0,"type":"virtual"},{"source":"古亭|OL","target":"古亭","weight":0,"type":"virtual"},{"source":"古亭","target":"古亭|OX","weight":0,"type":"virtual"},{"source":"古亭|OX","target":"古亭","weight":0,"type":"virtual"},{"source":"古亭|G","target":"古亭|OL","weight":120,"type":"transfer"},{"source":"古亭|OL","target":"古亭|G","weight":120,"type":"transfer"},{"source":"古亭|G","target":"古亭|OX","weight":120,"type":"transfer"},{"source":"古亭|OX","target":"古亭|G","weight":120,"type":"transfer"},{"source":"台電大樓","target":"台電大樓|G","weight":0,"type":"virtual"},{"source":"台電大樓|G","target":"台電大樓","weight":0,"type":"virtual"},{"source":"公館","target":"公館|G","weight":0,"type":"virtual"},{"source":"公館|G","target":"公館","weight":0,"type":"virtual"},{"source":"萬隆","target":"萬隆|G","weight":0,"type":"virtual"},{"source":"萬隆|G","target":"萬隆","weight":0,"type":"virtual"},{"source":"景美","target":"景美|G","weight":0,"type":"virtual"},{"source":"景美|G","target":"景美","weight":0,"type":"virtual"},{"source":"大坪林","target":"大坪林|G","weight":0,"type":"virtual"},{"source":"大坪林|G","target":"大坪林","weight":0,"type":"virtual"},{"source":"大坪林","target":"大坪林|Y","weight":0,"type":"virtual"},{"source":"大坪林|Y","target":"大坪林","weight":0,"type":"virtual"},{"source":"大坪林|G","target":"大坪林|Y","weight":180,"type":"transfer"},{"source":"大坪林|Y","target":"大坪林|G","weight":180,"type":"transfer"},{"source":"七張","target":"七張|G","weight":0,"type":"virtual"},{"source":"七張|G","target":"七張","weight":0,"type":"virtual"},{"source":"七張","target":"七張|GX","weight":0,"type":"virtual"},{"source":"七張|GX","target":"七張","weight":0,"type":"virtual"},{"source":"七張|G","target":"七張|GX","weight":180,"type":"transfer"},{"source":"七張|GX","target":"七張|G","weight":180,"type":"transfer"},{"source":"新店區公所","target":"新店區公所|G","weight":0,"type":"virtual"},{"source":"新店區公所|G","target":"新店區公所","weight":0,"type":"virtual"},{"source":"新店","target":"新店|G","weight":0,"type":"virtual"},{"source":"新店|G","target":"新店","weight":0,"type":"virtual"},{"source":"小碧潭","target":"小碧潭|GX","weight":0,"type":"virtual"},{"source":"小碧潭|GX","target":"小碧潭","weight":0,"type":"virtual"},{"source":"新北投","target":"新北投|RN","weight":0,"type":"virtual"},{"source":"新北投|RN","target":"新北投","weight":0,"type":"virtual"},{"source":"南港展覽館","target":"南港展覽館|BL","weight":0,"type":"virtual"},{"source":"南港展覽館|BL","target":"南港展覽館","weight":0,"type":"virtual"},{"source":"南港展覽館","target":"南港展覽館|BR","weight":0,"type":"virtual"},{"source":"南港展覽館|BR","target":"南港展覽館","weight":0,"type":"virtual"},{"source":"南港展覽館|BL","target":"南港展覽館|BR","weight":300,"type":"transfer"},{"source":"南港展覽館|BR","target":"南港展覽館|BL","weight":300,"type":"transfer"},{"source":"南港","target":"南港|BL","weight":0,"type":"virtual"},{"source":"南港|BL","target":"南港","weight":0,"type":"virtual"},{"source":"昆陽","target":"昆陽|BL","weight":0,"type":"virtual"},{"source":"昆陽|BL","target":"昆陽","weight":0,"type":"virtual"},{"source":"後山埤","target":"後山埤|BL","weight":0,"type":"virtual"},{"source":"後山埤|BL","target":"後山埤","weight":0,"type":"virtual"},{"source":"永春","target":"永春|BL","weight":0,"type":"virtual"},{"source":"永春|BL","target":"永春","weight":0,"type":"virtual"},{"source":"市政府","target":"市政府|BL","weight":0,"type":"virtual"},{"source":"市政府|BL","target":"市政府","weight":0,"type":"virtual"},{"source":"國父紀念館","target":"國父紀念館|BL","weight":0,"type":"virtual"},{"source":"國父紀念館|BL","target":"國父紀念館","weight":0,"type":"virtual"},{"source":"忠孝敦化","target":"忠孝敦化|BL","weight":0,"type":"virtual"},{"source":"忠孝敦化|BL","target":"忠孝敦化","weight":0,"type":"virtual"},{"source":"忠孝復興","target":"忠孝復興|BL","weight":0,"type":"virtual"},{"source":"忠孝復興|BL","target":"忠孝復興","weight":0,"type":"virtual"},{"source":"忠孝復興","target":"忠孝復興|BR","weight":0,"type":"virtual"},{"source":"忠孝復興|BR","target":"忠孝復興","weight":0,"type":"virtual"},{"source":"忠孝復興|BL","target":"忠孝復興|BR","weight":300,"type":"transfer"},{"source":"忠孝復興|BR","target":"忠孝復興|BL","weight":300,"type":"transfer"},{"source":"忠孝新生","target":"忠孝新生|BL","weight":0,"type":"virtual"},{"source":"忠孝新生|BL","target":"忠孝新生","weight":0,"type":"virtual"},{"source":"忠孝新生","target":"忠孝新生|OL","weight":0,"type":"virtual"},{"source":"忠孝新生|OL","target":"忠孝新生","weight":0,"type":"virtual"},{"source":"忠孝新生","target":"忠孝新生|OX","weight":0,"type":"virtual"},{"source":"忠孝新生|OX","target":"忠孝新生","weight":0,"type":"virtual"},{"source":"忠孝新生|BL","target":"忠孝新生|OL","weight":120,"type":"transfer"},{"source":"忠孝新生|OL","target":"忠孝新生|BL","weight":120,"type":"transfer"},{"source":"忠孝新生|BL","target":"忠孝新生|OX","weight":120,"type":"transfer"},{"source":"忠孝新生|OX","target":"忠孝新生|BL","weight":120,"type":"transfer"},{"source":"善導寺","target":"善導寺|BL","weight":0,"type":"virtual"},{"source":"善導寺|BL","target":"善導寺","weight":0,"type":"virtual"},{"source":"龍山寺","target":"龍山寺|BL","weight":0,"type":"virtual"},{"source":"龍山寺|BL","target":"龍山寺","weight":0,"type":"virtual"},{"source":"江子翠","target":"江子翠|BL","weight":0,"type":"virtual"},{"source":"江子翠|BL","target":"江子翠","weight":0,"type":"virtual"},{"source":"新埔","target":"新埔|BL","weight":0,"type":"virtual"},{"source":"新埔|BL","target":"新埔","weight":0,"type":"virtual"},{"source":"板橋","target":"板橋|BL","weight":0,"type":"virtual"},{"source":"板橋|BL","target":"板橋","weight":0,"type":"virtual"},{"source":"板橋","target":"板橋|Y","weight":0,"type":"virtual"},{"source":"板橋|Y","target":"板橋","weight":0,"type":"virtual"},{"source":"板橋|BL","target":"板橋|Y","weight":660,"type":"outside"},{"source":"板橋|Y","target":"板橋|BL","weight":660,"type":"outside"},{"source":"府中","target":"府中|BL","weight":0,"type":"virtual"},{"source":"府中|BL","target":"府中","weight":0,"type":"virtual"},{"source":"亞東醫院","target":"亞東醫院|BL","weight":0,"type":"virtual"},{"source":"亞東醫院|BL","target":"亞東醫院","weight":0,"type":"virtual"},{"source":"海山","target":"海山|BL","weight":0,"type":"virtual"},{"source":"海山|BL","target":"海山","weight":0,"type":"virtual"},{"source":"土城","target":"土城|BL","weight":0,"type":"virtual"},{"source":"土城|BL","target":"土城","weight":0,"type":"virtual"},{"source":"永寧","target":"永寧|BL","weight":0,"type":"virtual"},{"source":"永寧|BL","target":"永寧","weight":0,"type":"virtual"},{"source":"頂埔","target":"頂埔|BL","weight":0,"type":"virtual"},{"source":"頂埔|BL","target":"頂埔","weight":0,"type":"virtual"},{"source":"南港軟體園區","target":"南港軟體園區|BR","weight":0,"type":"virtual"},{"source":"南港軟體園區|BR","target":"南港軟體園區","weight":0,"type":"virtual"},{"source":"東湖","target":"東湖|BR","weight":0,"type":"virtual"},{"source":"東湖|BR","target":"東湖","weight":0,"type":"virtual"},{"source":"葫洲","target":"葫洲|BR","weight":0,"type":"virtual"},{"source":"葫洲|BR","target":"葫洲","weight":0,"type":"virtual"},{"source":"大湖公園","target":"大湖公園|BR","weight":0,"type":"virtual"},{"source":"大湖公園|BR","target":"大湖公園","weight":0,"type":"virtual"},{"source":"內湖","target":"內湖|BR","weight":0,"type":"virtual"},{"source":"內湖|BR","target":"內湖","weight":0,"type":"virtual"},{"source":"文德","target":"文德|BR","weight":0,"type":"virtual"},{"source":"文德|BR","target":"文德","weight":0,"type":"virtual"},{"source":"港墘","target":"港墘|BR","weight":0,"type":"virtual"},{"source":"港墘|BR","target":"港墘","weight":0,"type":"virtual"},{"source":"西湖","target":"西湖|BR","weight":0,"type":"virtual"},{"source":"西湖|BR","target":"西湖","weight":0,"type":"virtual"},{"source":"劍南路","target":"劍南路|BR","weight":0,"type":"virtual"},{"source":"劍南路|BR","target":"劍南路","weight":0,"type":"virtual"},{"source":"大直","target":"大直|BR","weight":0,"type":"virtual"},{"source":"大直|BR","target":"大直","weight":0,"type":"virtual"},{"source":"松山機場","target":"松山機場|BR","weight":0,"type":"virtual"},{"source":"松山機場|BR","target":"松山機場","weight":0,"type":"virtual"},{"source":"中山國中","target":"中山國中|BR","weight":0,"type":"virtual"},{"source":"中山國中|BR","target":"中山國中","weight":0,"type":"virtual"},{"source":"科技大樓","target":"科技大樓|BR","weight":0,"type":"virtual"},{"source":"科技大樓|BR","target":"科技大樓","weight":0,"type":"virtual"},{"source":"六張犁","target":"六張犁|BR","weight":0,"type":"virtual"},{"source":"六張犁|BR","target":"六張犁","weight":0,"type":"virtual"},{"source":"麟光","target":"麟光|BR","weight":0,"type":"virtual"},{"source":"麟光|BR","target":"麟光","weight":0,"type":"virtual"},{"source":"辛亥","target":"辛亥|BR","weight":0,"type":"virtual"},{"source":"辛亥|BR","target":"辛亥","weight":0,"type":"virtual"},{"source":"萬芳醫院","target":"萬芳醫院|BR","weight":0,"type":"virtual"},{"source":"萬芳醫院|BR","target":"萬芳醫院","weight":0,"type":"virtual"},{"source":"萬芳社區","target":"萬芳社區|BR","weight":0,"type":"virtual"},{"source":"萬芳社區|BR","target":"萬芳社區","weight":0,"type":"virtual"},{"source":"木柵","target":"木柵|BR","weight":0,"type":"virtual"},{"source":"木柵|BR","target":"木柵","weight":0,"type":"virtual"},{"source":"動物園","target":"動物園|BR","weight":0,"type":"virtual"},{"source":"動物園|BR","target":"動物園","weight":0,"type":"virtual"},{"source":"蘆洲","target":"蘆洲|OL","weight":0,"type":"virtual"},{"source":"蘆洲|OL","target":"蘆洲","weight":0,"type":"virtual"},{"source":"三民高中","target":"三民高中|OL","weight":0,"type":"virtual"},{"source":"三民高中|OL","target":"三民高中","weight":0,"type":"virtual"},{"source":"徐匯中學","target":"徐匯中學|OL","weight":0,"type":"virtual"},{"source":"徐匯中學|OL","target":"徐匯中學","weight":0,"type":"virtual"},{"source":"三和國中","target":"三和國中|OL","weight":0,"type":"virtual"},{"source":"三和國中|OL","target":"三和國中","weight":0,"type":"virtual"},{"source":"三重國小","target":"三重國小|OL","weight":0,"type":"virtual"},{"source":"三重國小|OL","target":"三重國小","weight":0,"type":"virtual"},{"source":"大橋頭","target":"大橋頭|OL","weight":0,"type":"virtual"},{"source":"大橋頭|OL","target":"大橋頭","weight":0,"type":"virtual"},{"source":"大橋頭","target":"大橋頭|OX","weight":0,"type":"virtual"},{"source":"大橋頭|OX","target":"大橋頭","weight":0,"type":"virtual"},{"source":"大橋頭|OL","target":"大橋頭|OX","weight":60,"type":"transfer"},{"source":"大橋頭|OX","target":"大橋頭|OL","weight":60,"type":"transfer"},{"source":"中山國小","target":"中山國小|OL","weight":0,"type":"virtual"},{"source":"中山國小|OL","target":"中山國小","weight":0,"type":"virtual"},{"source":"中山國小","target":"中山國小|OX","weight":0,"type":"virtual"},{"source":"中山國小|OX","target":"中山國小","weight":0,"type":"virtual"},{"source":"行天宮","target":"行天宮|OL","weight":0,"type":"virtual"},{"source":"行天宮|OL","target":"行天宮","weight":0,"type":"virtual"},{"source":"行天宮","target":"行天宮|OX","weight":0,"type":"virtual"},{"source":"行天宮|OX","target":"行天宮","weight":0,"type":"virtual"},{"source":"頂溪","target":"頂溪|OL","weight":0,"type":"virtual"},{"source":"頂溪|OL","target":"頂溪","weight":0,"type":"virtual"},{"source":"頂溪","target":"頂溪|OX","weight":0,"type":"virtual"},{"source":"頂溪|OX","target":"頂溪","weight":0,"type":"virtual"},{"source":"永安市場","target":"永安市場|OL","weight":0,"type":"virtual"},{"source":"永安市場|OL","target":"永安市場","weight":0,"type":"virtual"},{"source":"永安市場","target":"永安市場|OX","weight":0,"type":"virtual"},{"source":"永安市場|OX","target":"永安市場","weight":0,"type":"virtual"},{"source":"景安","target":"景安|OL","weight":0,"type":"virtual"},{"source":"景安|OL","target":"景安","weight":0,"type":"virtual"},{"source":"景安","target":"景安|OX","weight":0,"type":"virtual"},{"source":"景安|OX","target":"景安","weight":0,"type":"virtual"},{"source":"景安","target":"景安|Y","weight":0,"type":"virtual"},{"source":"景安|Y","target":"景安","weight":0,"type":"virtual"},{"source":"景安|OL","target":"景安|Y","weight":360,"type":"transfer"},{"source":"景安|Y","target":"景安|OL","weight":360,"type":"transfer"},{"source":"景安|OX","target":"景安|Y","weight":360,"type":"transfer"},{"source":"景安|Y","target":"景安|OX","weight":360,"type":"transfer"},{"source":"南勢角","target":"南勢角|OL","weight":0,"type":"virtual"},{"source":"南勢角|OL","target":"南勢角","weight":0,"type":"virtual"},{"source":"南勢角","target":"南勢角|OX","weight":0,"type":"virtual"},{"source":"南勢角|OX","target":"南勢角","weight":0,"type":"virtual"},{"source":"迴龍","target":"迴龍|OX","weight":0,"type":"virtual"},{"source":"迴龍|OX","target":"迴龍","weight":0,"type":"virtual"},{"source":"丹鳳","target":"丹鳳|OX","weight":0,"type":"virtual"},{"source":"丹鳳|OX","target":"丹鳳","weight":0,"type":"virtual"},{"source":"輔大","target":"輔大|OX","weight":0,"type":"virtual"},{"source":"輔大|OX","target":"輔大","weight":0,"type":"virtual"},{"source":"新莊","target":"新莊|OX","weight":0,"type":"virtual"},{"source":"新莊|OX","target":"新莊","weight":0,"type":"virtual"},{"source":"頭前庄","target":"頭前庄|OX","weight":0,"type":"virtual"},{"source":"頭前庄|OX","target":"頭前庄","weight":0,"type":"virtual"},{"source":"頭前庄","target":"頭前庄|Y","weight":0,"type":"virtual"},{"source":"頭前庄|Y","target":"頭前庄","weight":0,"type":"virtual"},{"source":"頭前庄|OX","target":"頭前庄|Y","weight":360,"type":"transfer"},{"source":"頭前庄|Y","target":"頭前庄|OX","weight":360,"type":"transfer"},{"source":"先嗇宮","target":"先嗇宮|OX","weight":0,"type":"virtual"},{"source":"先嗇宮|OX","target":"先嗇宮","weight":0,"type":"virtual"},{"source":"三重","target":"三重|OX","weight":0,"type":"virtual"},{"source":"三重|OX","target":"三重","weight":0,"type":"virtual"},{"source":"菜寮","target":"菜寮|OX","weight":0,"type":"virtual"},{"source":"菜寮|OX","target":"菜寮","weight":0,"type":"virtual"},{"source":"台北橋","target":"台北橋|OX","weight":0,"type":"virtual"},{"source":"台北橋|OX","target":"台北橋","weight":0,"type":"virtual"},{"source":"新北產業園區","target":"新北產業園區|Y","weight":0,"type":"virtual"},{"source":"新北產業園區|Y","target":"新北產業園區","weight":0,"type":"virtual"},{"source":"幸福","target":"幸福|Y","weight":0,"type":"virtual"},{"source":"幸福|Y","target":"幸福","weight":0,"type":"virtual"},{"source":"新埔民生","target":"新埔民生|Y","weight":0,"type":"virtual"},{"source":"新埔民生|Y","target":"新埔民生","weight":0,"type":"virtual"},{"source":"板新","target":"板新|Y","weight":0,"type":"virtual"},{"source":"板新|Y","target":"板新","weight":0,"type":"virtual"},{"source":"中原","target":"中原|Y","weight":0,"type":"virtual"},{"source":"中原|Y","target":"中原","weight":0,"type":"virtual"},{"source":"橋和","target":"橋和|Y","weight":0,"type":"virtual"},{"source":"橋和|Y","target":"橋和","weight":0,"type":"virtual"},{"source":"中和","target":"中和|Y","weight":0,"type":"virtual"},{"source":"中和|Y","target":"中和","weight":0,"type":"virtual"},{"source":"景平","target":"景平|Y","weight":0,"type":"virtual"},{"source":"景平|Y","target":"景平","weight":0,"type":"virtual"},{"source":"秀朗橋","target":"秀朗橋|Y","weight":0,"type":"virtual"},{"source":"秀朗橋|Y","target":"秀朗橋","weight":0,"type":"virtual"},{"source":"十四張","target":"十四張|Y","weight":0,"type":"virtual"},{"source":"十四張|Y","target":"十四張","weight":0,"type":"virtual"},{"source":"新埔|BL","target":"新埔民生|Y","weight":540,"type":"outside"},{"source":"新埔民生|Y","target":"新埔|BL","weight":540,"type":"outside"}];
+const renderMapping = {"淡水|R":"淡水","淡水":"淡水","紅樹林|R":"紅樹林","紅樹林":"紅樹林","竹圍|R":"竹圍","竹圍":"竹圍","關渡|R":"關渡","關渡":"關渡","忠義|R":"忠義","忠義":"忠義","復興崗|R":"復興崗","復興崗":"復興崗","北投|RN":"北投","北投|R":"北投","北投":"北投","奇岩|R":"奇岩","奇岩":"奇岩","唭哩岸|R":"唭哩岸","唭哩岸":"唭哩岸","石牌|R":"石牌","石牌":"石牌","明德|R":"明德","明德":"明德","芝山|R":"芝山","芝山":"芝山","士林|R":"士林","士林":"士林","劍潭|R":"劍潭","劍潭":"劍潭","圓山|R":"圓山","圓山":"圓山","民權西路|OX":"民權西路","民權西路|R":"民權西路","民權西路|OL":"民權西路","民權西路":"民權西路","雙連|R":"雙連","雙連":"雙連","中山|G":"中山","中山|R":"中山","中山":"中山","台北車站|BL":"台北車站","台北車站|R":"台北車站","台北車站":"台北車站","台大醫院|R":"台大醫院","台大醫院":"台大醫院","中正紀念堂|G":"中正紀念堂","中正紀念堂|R":"中正紀念堂","中正紀念堂":"中正紀念堂","東門|OX":"東門","東門|R":"東門","東門|OL":"東門","東門":"東門","大安森林公園|R":"大安森林公園","大安森林公園":"大安森林公園","大安|BR":"大安","大安|R":"大安","大安":"大安","信義安和|R":"信義安和","信義安和":"信義安和","台北101/世貿|R":"台北101/世貿","台北101/世貿":"台北101/世貿","象山|R":"象山","象山":"象山","廣慈/奉天宮|R":"廣慈/奉天宮","廣慈/奉天宮":"廣慈/奉天宮","松山|G":"松山","松山":"松山","南京三民|G":"南京三民","南京三民":"南京三民","台北小巨蛋|G":"台北小巨蛋","台北小巨蛋":"台北小巨蛋","南京復興|G":"南京復興","南京復興|BR":"南京復興","南京復興":"南京復興","松江南京|OX":"松江南京","松江南京|G":"松江南京","松江南京|OL":"松江南京","松江南京":"松江南京","北門|G":"北門","北門":"北門","西門|G":"西門","西門|BL":"西門","西門":"西門","小南門|G":"小南門","小南門":"小南門","古亭|OX":"古亭","古亭|G":"古亭","古亭|OL":"古亭","古亭":"古亭","台電大樓|G":"台電大樓","台電大樓":"台電大樓","公館|G":"公館","公館":"公館","萬隆|G":"萬隆","萬隆":"萬隆","景美|G":"景美","景美":"景美","大坪林|Y":"大坪林","大坪林|G":"大坪林","大坪林":"大坪林","七張|G":"七張","七張|GX":"七張","七張":"七張","新店區公所|G":"新店區公所","新店區公所":"新店區公所","新店|G":"新店","新店":"新店","小碧潭|GX":"小碧潭","小碧潭":"小碧潭","新北投|RN":"新北投","新北投":"新北投","南港展覽館|BL":"南港展覽館","南港展覽館|BR":"南港展覽館","南港展覽館":"南港展覽館","南港|BL":"南港","南港":"南港","昆陽|BL":"昆陽","昆陽":"昆陽","後山埤|BL":"後山埤","後山埤":"後山埤","永春|BL":"永春","永春":"永春","市政府|BL":"市政府","市政府":"市政府","國父紀念館|BL":"國父紀念館","國父紀念館":"國父紀念館","忠孝敦化|BL":"忠孝敦化","忠孝敦化":"忠孝敦化","忠孝復興|BL":"忠孝復興","忠孝復興|BR":"忠孝復興","忠孝復興":"忠孝復興","忠孝新生|OX":"忠孝新生","忠孝新生|BL":"忠孝新生","忠孝新生|OL":"忠孝新生","忠孝新生":"忠孝新生","善導寺|BL":"善導寺","善導寺":"善導寺","龍山寺|BL":"龍山寺","龍山寺":"龍山寺","江子翠|BL":"江子翠","江子翠":"江子翠","新埔|BL":"新埔","新埔":"新埔","板橋|Y":"板橋","板橋|BL":"板橋","板橋":"板橋","府中|BL":"府中","府中":"府中","亞東醫院|BL":"亞東醫院","亞東醫院":"亞東醫院","海山|BL":"海山","海山":"海山","土城|BL":"土城","土城":"土城","永寧|BL":"永寧","永寧":"永寧","頂埔|BL":"頂埔","頂埔":"頂埔","南港軟體園區|BR":"南港軟體園區","南港軟體園區":"南港軟體園區","東湖|BR":"東湖","東湖":"東湖","葫洲|BR":"葫洲","葫洲":"葫洲","大湖公園|BR":"大湖公園","大湖公園":"大湖公園","內湖|BR":"內湖","內湖":"內湖","文德|BR":"文德","文德":"文德","港墘|BR":"港墘","港墘":"港墘","西湖|BR":"西湖","西湖":"西湖","劍南路|BR":"劍南路","劍南路":"劍南路","大直|BR":"大直","大直":"大直","松山機場|BR":"松山機場","松山機場":"松山機場","中山國中|BR":"中山國中","中山國中":"中山國中","科技大樓|BR":"科技大樓","科技大樓":"科技大樓","六張犁|BR":"六張犁","六張犁":"六張犁","麟光|BR":"麟光","麟光":"麟光","辛亥|BR":"辛亥","辛亥":"辛亥","萬芳醫院|BR":"萬芳醫院","萬芳醫院":"萬芳醫院","萬芳社區|BR":"萬芳社區","萬芳社區":"萬芳社區","木柵|BR":"木柵","木柵":"木柵","動物園|BR":"動物園","動物園":"動物園","蘆洲|OL":"蘆洲","蘆洲":"蘆洲","三民高中|OL":"三民高中","三民高中":"三民高中","徐匯中學|OL":"徐匯中學","徐匯中學":"徐匯中學","三和國中|OL":"三和國中","三和國中":"三和國中","三重國小|OL":"三重國小","三重國小":"三重國小","大橋頭|OX":"大橋頭","大橋頭|OL":"大橋頭","大橋頭":"大橋頭","中山國小|OX":"中山國小","中山國小|OL":"中山國小","中山國小":"中山國小","行天宮|OX":"行天宮","行天宮|OL":"行天宮","行天宮":"行天宮","頂溪|OX":"頂溪","頂溪|OL":"頂溪","頂溪":"頂溪","永安市場|OX":"永安市場","永安市場|OL":"永安市場","永安市場":"永安市場","景安|OX":"景安","景安|Y":"景安","景安|OL":"景安","景安":"景安","南勢角|OX":"南勢角","南勢角|OL":"南勢角","南勢角":"南勢角","迴龍|OX":"迴龍","迴龍":"迴龍","丹鳳|OX":"丹鳳","丹鳳":"丹鳳","輔大|OX":"輔大","輔大":"輔大","新莊|OX":"新莊","新莊":"新莊","頭前庄|OX":"頭前庄","頭前庄|Y":"頭前庄","頭前庄":"頭前庄","先嗇宮|OX":"先嗇宮","先嗇宮":"先嗇宮","三重|OX":"三重","三重":"三重","菜寮|OX":"菜寮","菜寮":"菜寮","台北橋|OX":"台北橋","台北橋":"台北橋","新北產業園區|Y":"新北產業園區","新北產業園區":"新北產業園區","幸福|Y":"幸福","幸福":"幸福","新埔民生|Y":"新埔民生","新埔民生":"新埔民生","板新|Y":"板新","板新":"板新","中原|Y":"中原","中原":"中原","橋和|Y":"橋和","橋和":"橋和","中和|Y":"中和","中和":"中和","景平|Y":"景平","景平":"景平","秀朗橋|Y":"秀朗橋","秀朗橋":"秀朗橋","十四張|Y":"十四張","十四張":"十四張"};
+const segmentPaths = {"淡水|紅樹林":[[-10.0,-16.0],[-8.0,-16.0]],"紅樹林|竹圍":[[-8.0,-16.0],[-6.0,-16.0]],"竹圍|關渡":[[-6.0,-16.0],[-4.0,-16.0]],"關渡|忠義":[[-4.0,-16.0],[-2.0,-16.0]],"忠義|復興崗":[[-2.0,-16.0],[0,-16]],"復興崗|北投":[[0.0,-16.0],[0,-15]],"北投|奇岩":[[0.0,-15.0],[0.0,-14.0]],"奇岩|唭哩岸":[[0.0,-14.0],[0.0,-13.0]],"唭哩岸|石牌":[[0.0,-13.0],[0.0,-12.0]],"石牌|明德":[[0.0,-12.0],[0.0,-11.0]],"明德|芝山":[[0.0,-11.0],[0.0,-10.0]],"芝山|士林":[[0.0,-10.0],[0.0,-9.0]],"士林|劍潭":[[0.0,-9.0],[0.0,-8.0]],"劍潭|圓山":[[0.0,-8.0],[0.0,-7.0]],"圓山|民權西路":[[0.0,-7.0],[0,-6]],"民權西路|雙連":[[0.0,-6.0],[0.0,-4.5]],"雙連|中山":[[0.0,-4.5],[0,-3]],"中山|台北車站":[[0.0,-3.0],[0,0]],"台北車站|台大醫院":[[0.0,0.0],[0.0,1.0]],"台大醫院|中正紀念堂":[[0.0,1.0],[0,2]],"中正紀念堂|東門":[[0.0,2.0],[4,2]],"東門|大安森林公園":[[4.0,2.0],[5.0,2.0]],"大安森林公園|大安":[[5.0,2.0],[6,2]],"大安|信義安和":[[6.0,2.0],[8.0,2.0]],"信義安和|台北101/世貿":[[8.0,2.0],[10.0,2.0]],"台北101/世貿|象山":[[10.0,2.0],[12.0,2.0]],"象山|廣慈/奉天宮":[[12.0,2.0],[14,2]],"松山|南京三民":[[12.0,-3.0],[10.0,-3.0]],"南京三民|台北小巨蛋":[[10.0,-3.0],[8.0,-3.0]],"台北小巨蛋|南京復興":[[8.0,-3.0],[6,-3]],"南京復興|松江南京":[[6.0,-3.0],[4,-3]],"松江南京|中山":[[4.0,-3.0],[0,-3]],"中山|北門":[[0.0,-3.0],[-2,-1]],"北門|西門":[[-2.0,-1.0],[-2,0]],"西門|小南門":[[-2.0,0.0],[-1,1]],"小南門|中正紀念堂":[[-1.0,1.0],[0,2]],"中正紀念堂|古亭":[[0.0,2.0],[2,4]],"古亭|台電大樓":[[2.0,4.0],[2.0,5.6]],"台電大樓|公館":[[2.0,5.6],[2.0,7.2]],"公館|萬隆":[[2.0,7.2],[2.0,8.8]],"萬隆|景美":[[2.0,8.8],[2.0,10.4]],"景美|大坪林":[[2.0,10.4],[2,12]],"大坪林|七張":[[2.0,12.0],[2,14]],"七張|新店區公所":[[2.0,14.0],[2.0,15.0]],"新店區公所|新店":[[2.0,15.0],[2,16]],"七張|小碧潭":[[2.0,14.0],[0,14]],"北投|新北投":[[0.0,-15.0],[2,-15]],"南港展覽館|南港":[[22.0,-2.0],[20,0]],"南港|昆陽":[[20.0,0.0],[18.0,0.0]],"昆陽|後山埤":[[18.0,0.0],[16.0,0.0]],"後山埤|永春":[[16.0,0.0],[14.0,0.0]],"永春|市政府":[[14.0,0.0],[12.0,0.0]],"市政府|國父紀念館":[[12.0,0.0],[10.0,0.0]],"國父紀念館|忠孝敦化":[[10.0,0.0],[8.0,0.0]],"忠孝敦化|忠孝復興":[[8.0,0.0],[6,0]],"忠孝復興|忠孝新生":[[6.0,0.0],[4,0]],"忠孝新生|善導寺":[[4.0,0.0],[2.0,0.0]],"善導寺|台北車站":[[2.0,0.0],[0,0]],"台北車站|西門":[[0.0,0.0],[-2,0]],"西門|龍山寺":[[-2.0,0.0],[-4.333,0.0]],"龍山寺|江子翠":[[-4.333,0.0],[-6.667,0.0]],"江子翠|新埔":[[-6.667,0.0],[-9,0]],"新埔|板橋":[[-9.0,0.0],[-11,0]],"板橋|府中":[[-11.0,0.0],[-13,0]],"府中|亞東醫院":[[-13.0,0.0],[-14.0,1.0]],"亞東醫院|海山":[[-14.0,1.0],[-15.0,2.0]],"海山|土城":[[-15.0,2.0],[-16.0,3.0]],"土城|永寧":[[-16.0,3.0],[-17.0,4.0]],"永寧|頂埔":[[-17.0,4.0],[-18,5]],"南港展覽館|南港軟體園區":[[22.0,-2.0],[22.0,-4.609]],"南港軟體園區|東湖":[[22.0,-4.609],[22,-7],[21.845,-7.155]],"東湖|葫洲":[[21.845,-7.155],[20,-9]],"葫洲|大湖公園":[[20.0,-9.0],[18.0,-9.0]],"大湖公園|內湖":[[18.0,-9.0],[16.0,-9.0]],"內湖|文德":[[16.0,-9.0],[14.0,-9.0]],"文德|港墘":[[14.0,-9.0],[12.0,-9.0]],"港墘|西湖":[[12.0,-9.0],[10.0,-9.0]],"西湖|劍南路":[[10.0,-9.0],[8.0,-9.0]],"劍南路|大直":[[8.0,-9.0],[6,-9]],"大直|松山機場":[[6.0,-9.0],[6.0,-7.0]],"松山機場|中山國中":[[6.0,-7.0],[6.0,-5.0]],"中山國中|南京復興":[[6.0,-5.0],[6,-3]],"南京復興|忠孝復興":[[6.0,-3.0],[6,0]],"忠孝復興|大安":[[6.0,0.0],[6,2]],"大安|科技大樓":[[6.0,2.0],[6.0,3.333]],"科技大樓|六張犁":[[6.0,3.333],[6.0,4.667]],"六張犁|麟光":[[6.0,4.667],[6,6]],"麟光|辛亥":[[6.0,6.0],[7.0,7.0]],"辛亥|萬芳醫院":[[7.0,7.0],[8,8]],"萬芳醫院|萬芳社區":[[8.0,8.0],[10.0,8.0]],"萬芳社區|木柵":[[10.0,8.0],[12.0,8.0]],"木柵|動物園":[[12.0,8.0],[14,8]],"蘆洲|三民高中":[[-8.0,-11.0],[-7.0,-10.0]],"三民高中|徐匯中學":[[-7.0,-10.0],[-6.0,-9.0]],"徐匯中學|三和國中":[[-6.0,-9.0],[-5.0,-8.0]],"三和國中|三重國小":[[-5.0,-8.0],[-4.0,-7.0]],"三重國小|大橋頭":[[-4.0,-7.0],[-3,-6]],"大橋頭|民權西路":[[-3.0,-6.0],[0,-6]],"民權西路|中山國小":[[0.0,-6.0],[2,-6]],"中山國小|行天宮":[[2.0,-6.0],[4,-6]],"行天宮|松江南京":[[4.0,-6.0],[4,-3]],"松江南京|忠孝新生":[[4.0,-3.0],[4,0]],"忠孝新生|東門":[[4.0,0.0],[4,2]],"東門|古亭":[[4.0,2.0],[2,4]],"古亭|頂溪":[[2.0,4.0],[0,6]],"頂溪|永安市場":[[0.0,6.0],[-1.0,7.0]],"永安市場|景安":[[-1.0,7.0],[-2,8]],"景安|南勢角":[[-2.0,8.0],[-2,10]],"迴龍|丹鳳":[[-18.0,-1.0],[-16.75,-2.25]],"丹鳳|輔大":[[-16.75,-2.25],[-15.5,-3.5]],"輔大|新莊":[[-15.5,-3.5],[-14.25,-4.75]],"新莊|頭前庄":[[-14.25,-4.75],[-13,-6]],"頭前庄|先嗇宮":[[-13.0,-6.0],[-11.0,-6.0]],"先嗇宮|三重":[[-11.0,-6.0],[-9.0,-6.0]],"三重|菜寮":[[-9.0,-6.0],[-7.0,-6.0]],"菜寮|台北橋":[[-7.0,-6.0],[-5.0,-6.0]],"台北橋|大橋頭":[[-5.0,-6.0],[-3,-6]],"新北產業園區|幸福":[[-13.0,-10.0],[-13.0,-8.0]],"幸福|頭前庄":[[-13.0,-8.0],[-13,-6]],"頭前庄|新埔民生":[[-13.0,-6.0],[-9,-2]],"新埔民生|板橋":[[-9.0,-2.0],[-11,0]],"板橋|板新":[[-11.0,0.0],[-11,2]],"板新|中原":[[-11.0,2.0],[-8.97,4.03]],"中原|橋和":[[-8.97,4.03],[-6.939,6.061]],"橋和|中和":[[-6.939,6.061],[-5,8],[-4.871,8.0]],"中和|景安":[[-4.871,8.0],[-2,8]],"景安|景平":[[-2.0,8.0],[-1.0,9.0]],"景平|秀朗橋":[[-1.0,9.0],[0.0,10.0]],"秀朗橋|十四張":[[0.0,10.0],[1.0,11.0]],"十四張|大坪林":[[1.0,11.0],[2,12]]};
+
+
+/* ===================================================================
+ * 2. 路線定義
+ * =================================================================== */
+const LINE_INFO = {
+  R:  { name: '淡水信義線', short: 'R',  color: '#e3002c' },
+  RN: { name: '新北投支線', short: 'R22A', color: '#ef9298' },
+  G:  { name: '松山新店線', short: 'G',  color: '#008659' },
+  GX: { name: '小碧潭支線', short: 'G03A', color: '#d2de1a' },
+  BL: { name: '板南線',     short: 'BL', color: '#0070bd' },
+  BR: { name: '文湖線',     short: 'BR', color: '#c48c31' },
+  OL: { name: '中和新蘆線', short: 'O',  color: '#f8b61c', group: 'O', branch: '蘆洲' },
+  OX: { name: '中和新蘆線', short: 'O',  color: '#f8b61c', group: 'O', branch: '迴龍' },
+  Y:  { name: '環狀線',     short: 'Y',  color: '#ffdb00' },
+};
+const groupOf = l => LINE_INFO[l].group || l;
+const DRAW_ORDER = ['Y', 'BR', 'GX', 'G', 'OL', 'OX', 'BL', 'RN', 'R'];
+
+/* ---- 衍生結構 ---- */
+const STATIONS = Object.keys(stationData);
+const stationLines = {};          // 實體站 → [line]
+for (const k in renderMapping) {
+  if (!k.includes('|')) continue;
+  const [s, l] = k.split('|');
+  (stationLines[s] = stationLines[s] || []).push(l);
+}
+const OUTSIDE_PAIRS = graphEdges.filter(e => e.type === 'outside').map(e => [renderMapping[e.source], renderMapping[e.target]]);
+const outsideSet = new Set(OUTSIDE_PAIRS.flat());
+const isInterchange = s => new Set((stationLines[s] || []).map(groupOf)).size > 1 || outsideSet.has(s);
+
+// 繪圖用線段（去重：中和新蘆線共線段只畫一次）
+const drawSegments = [];
+{
+  const seen = new Set();
+  for (const r of serviceRoutes) {
+    const st = r.stations;
+    for (let i = 0; i < st.length - 1; i++) {
+      const a = st[i], b = st[i + 1];
+      const key = [a, b].sort().join('|') + '|' + groupOf(r.line);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const pts = segmentPaths[a + '|' + b] || [[stationData[a].x, stationData[a].y], [stationData[b].x, stationData[b].y]];
+      drawSegments.push({ a, b, line: r.line, group: groupOf(r.line), pts });
+    }
+  }
+  drawSegments.sort((p, q) => DRAW_ORDER.indexOf(p.line) - DRAW_ORDER.indexOf(q.line));
+}
+
+// 鄰接表
+const adj = {};
+for (const e of graphEdges) (adj[e.source] = adj[e.source] || []).push(e);
+
+/* ===================================================================
+ * 3. Dijkstra（實體節點僅作為起訖，不可作為中繼 → 避免 0 分「偷渡」轉乘）
+ * =================================================================== */
+class MinHeap {
+  constructor() { this.a = []; }
+  push(x) { const a = this.a; a.push(x); let i = a.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (a[p][0] <= a[i][0]) break; [a[p], a[i]] = [a[i], a[p]]; i = p; } }
+  pop() { const a = this.a, top = a[0], last = a.pop();
+    if (a.length) { a[0] = last; let i = 0;
+      for (;;) { const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < a.length && a[l][0] < a[m][0]) m = l;
+        if (r < a.length && a[r][0] < a[m][0]) m = r;
+        if (m === i) break; [a[m], a[i]] = [a[i], a[m]]; i = m; } }
+    return top; }
+  get size() { return this.a.length; }
+}
+function dijkstra(src, dst) {
+  const dist = { [src]: 0 }, prev = {}, prevEdge = {};
+  const h = new MinHeap(); h.push([0, src]);
+  while (h.size) {
+    const [d, u] = h.pop();
+    if (d > dist[u]) continue;
+    if (u === dst) break;
+    if (!u.includes('|') && u !== src) continue;     // 實體節點不得中繼
+    for (const e of adj[u] || []) {
+      // 小幅懲罰轉乘，讓同時間時偏好較少轉乘
+      const nd = d + e.weight + (e.type === 'transfer' || e.type === 'outside' ? 0.01 : 0);
+      if (nd < (dist[e.target] ?? Infinity)) { dist[e.target] = nd; prev[e.target] = u; prevEdge[e.target] = e; h.push([nd, e.target]); }
+    }
+  }
+  if (dist[dst] === undefined) return null;
+  const nodes = [], edges = [];
+  for (let v = dst; v !== undefined; v = prev[v]) { nodes.unshift(v); if (prevEdge[v]) edges.unshift(prevEdge[v]); }
+  return { nodes, edges, seconds: Math.round(dist[dst]) };
+}
+
+/* ---- 方向判斷：在 serviceRoutes 中找出包含此段連續站序的路線 ---- */
+function directionOf(line, seq) {
+  const g = groupOf(line), heads = new Set();
+  for (const r of serviceRoutes) {
+    if (groupOf(r.line) !== g) continue;
+    const st = r.stations, i0 = st.indexOf(seq[0]);
+    if (i0 < 0) continue;
+    for (const dir of [1, -1]) {
+      let ok = true;
+      for (let k = 1; k < seq.length; k++) if (st[i0 + dir * k] !== seq[k]) { ok = false; break; }
+      if (ok) heads.add(dir === 1 ? st[st.length - 1] : st[0]);
+    }
+  }
+  return [...heads].join(' / ');
+}
+
+/* ---- 把演算法路徑轉成乘車指引 ---- */
+function buildItinerary(res) {
+  const steps = [];
+  let ride = null;
+  for (const e of res.edges) {
+    if (e.type === 'virtual') continue;
+    const [sa, la] = e.source.split('|'), [sb] = e.target.split('|');
+    if (e.type === 'ride') {
+      if (ride && ride.line === la) { ride.stations.push(sb); ride.sec += e.weight; }
+      else { ride = { kind: 'ride', line: la, stations: [sa, sb], sec: e.weight }; steps.push(ride); }
+    } else {
+      ride = null;
+      steps.push({ kind: 'walk', from: sa, to: sb, toLine: e.target.split('|')[1], sec: e.weight, outside: e.type === 'outside' });
+    }
+  }
+  steps.forEach(s => { if (s.kind === 'ride') s.dir = directionOf(s.line, s.stations); });
+  return steps;
+}
+
+/* ===================================================================
+ * 4. 畫布：視圖變換、拖曳、縮放
+ * =================================================================== */
+const canvas = document.getElementById('map');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+const view = { scale: 30, ox: 0, oy: 0 };         // screen = world * scale + o
+const bbox = (() => {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const s of STATIONS) { const p = stationData[s]; x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+  return { x0, y0, x1, y1 };
+})();
+function fitView(targetStations) {
+  const card = document.getElementById('card').getBoundingClientRect();
+  const wide = W > 720;
+  const padL = wide ? card.right + 40 : 30, padR = wide ? 80 : 30;
+  const padT = wide ? 50 : card.bottom + 20, padB = 50;
+  let b = bbox;
+  if (targetStations && targetStations.length) {
+    b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    for (const s of targetStations) { const p = stationData[s]; b.x0 = Math.min(b.x0, p.x); b.y0 = Math.min(b.y0, p.y); b.x1 = Math.max(b.x1, p.x); b.y1 = Math.max(b.y1, p.y); }
+  }
+  const bw = Math.max(b.x1 - b.x0, 4) + 3, bh = Math.max(b.y1 - b.y0, 4) + 2;     // 加上站名留白
+  const aw = Math.max(W - padL - padR, 120), ah = Math.max(H - padT - padB, 120);
+  view.scale = Math.min(aw / bw, ah / bh);
+  if (targetStations) view.scale = Math.min(view.scale, 70);
+  const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+  view.ox = padL + aw / 2 - cx * view.scale;
+  view.oy = padT + ah / 2 - cy * view.scale;
+  requestDraw();
+}
+const toScreen = (x, y) => [x * view.scale + view.ox, y * view.scale + view.oy];
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  requestDraw();
+}
+function zoomAt(f, sx, sy) {
+  const ns = Math.max(6, Math.min(160, view.scale * f));
+  f = ns / view.scale;
+  view.ox = sx - (sx - view.ox) * f; view.oy = sy - (sy - view.oy) * f; view.scale = ns;
+  requestDraw();
+}
+
+/* ---- 指標事件（拖曳 / 點擊 / 雙指縮放），以 hasDragged 防止拖曳誤觸 ---- */
+const pointers = new Map();
+let hasDragged = false, downPos = null, pinchDist = 0;
+canvas.addEventListener('pointerdown', ev => {
+  canvas.setPointerCapture(ev.pointerId);
+  pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (pointers.size === 1) { hasDragged = false; downPos = { x: ev.clientX, y: ev.clientY }; }
+  if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinchDist = Math.hypot(a.x - b.x, a.y - b.y); hasDragged = true; }
+});
+canvas.addEventListener('pointermove', ev => {
+  const p = pointers.get(ev.pointerId);
+  if (!p) { canvas.classList.toggle('hover', !!hitTest(ev.clientX, ev.clientY)); return; }
+  if (pointers.size === 1) {
+    if (!hasDragged && Math.hypot(ev.clientX - downPos.x, ev.clientY - downPos.y) > 5) { hasDragged = true; canvas.classList.add('dragging'); }
+    if (hasDragged) { view.ox += ev.clientX - p.x; view.oy += ev.clientY - p.y; requestDraw(); }
+  } else if (pointers.size === 2) {
+    const other = [...pointers.entries()].find(([id]) => id !== ev.pointerId)[1];
+    const nd = Math.hypot(ev.clientX - other.x, ev.clientY - other.y);
+    if (pinchDist > 0) zoomAt(nd / pinchDist, (ev.clientX + other.x) / 2, (ev.clientY + other.y) / 2);
+    pinchDist = nd;
+  }
+  p.x = ev.clientX; p.y = ev.clientY;
+});
+function endPointer(ev) {
+  if (!pointers.has(ev.pointerId)) return;
+  pointers.delete(ev.pointerId);
+  if (pointers.size === 0) {
+    canvas.classList.remove('dragging');
+    if (!hasDragged && ev.type === 'pointerup') { const s = hitTest(ev.clientX, ev.clientY); if (s) onStationClick(s); }
+  }
+  pinchDist = 0;
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('wheel', ev => { ev.preventDefault(); zoomAt(Math.exp(-ev.deltaY * 0.0015), ev.clientX, ev.clientY); }, { passive: false });
+document.getElementById('zoomIn').onclick = () => zoomAt(1.3, W / 2, H / 2);
+document.getElementById('zoomOut').onclick = () => zoomAt(1 / 1.3, W / 2, H / 2);
+document.getElementById('zoomFit').onclick = () => fitView();
+
+function stationRadius(s) { const k = view.scale; return isInterchange(s) ? Math.max(4.5, k * 0.24) : Math.max(3, k * 0.15); }
+function hitTest(sx, sy) {
+  let best = null, bd = Infinity;
+  for (const s of STATIONS) {
+    const [x, y] = toScreen(stationData[s].x, stationData[s].y);
+    const d = Math.hypot(x - sx, y - sy), r = Math.max(12, stationRadius(s) + 6);
+    if (d < r && d < bd) { bd = d; best = s; }
+  }
+  return best;
+}
+
+/* ===================================================================
+ * 5. 狀態機
+ *    0 = 初始；1 = 已選起站；2 = 已選起訖、顯示結果
+ * =================================================================== */
+const app = { state: 0, start: null, end: null, result: null, steps: null, pathStations: new Set(), pathSegs: new Set(), keyStations: new Set() };
+
+function setStart(s, { fromInput = false } = {}) {
+  app.state = 1; app.start = s; app.end = null; app.result = null; app.steps = null;
+  app.pathStations = new Set(); app.pathSegs = new Set(); app.keyStations = new Set([s]);
+  if (!fromInput) startInput.value = s;
+  endInput.disabled = false; endInput.value = ''; endInput.placeholder = '輸入或點選終站';
+  fillList(endList, s);
+  hint.textContent = '已選擇起站「' + s + '」，請點選地圖或輸入終點站。';
+  renderResult();
+  if (!fromInput && window.innerWidth > 720) endInput.focus({ preventScroll: true });
+  requestDraw();
+}
+function setEnd(s, { fromInput = false } = {}) {
+  if (!app.start || s === app.start) return;
+  const res = dijkstra(app.start, s);
+  if (!res) return;
+  app.state = 2; app.end = s; app.result = res;
+  if (!fromInput) endInput.value = s;
+  app.steps = buildItinerary(res);
+  app.pathStations = new Set(); app.pathSegs = new Set();
+  for (const st of app.steps) {
+    if (st.kind === 'ride') {
+      st.stations.forEach(x => app.pathStations.add(x));
+      for (let i = 0; i < st.stations.length - 1; i++) app.pathSegs.add([st.stations[i], st.stations[i + 1]].sort().join('|') + '|' + groupOf(st.line));
+    } else { app.pathStations.add(st.from); app.pathStations.add(st.to); }
+  }
+  app.pathStations.add(app.start); app.pathStations.add(s);
+  app.keyStations = new Set([app.start, s]);
+  app.steps.forEach(st => { if (st.kind === 'walk') { app.keyStations.add(st.from); app.keyStations.add(st.to); } });
+  hint.textContent = '點選地圖其他站點可直接設為新起站。';
+  renderResult();
+  if (W <= 720) fitView([...app.pathStations]);       // 手機：自動對焦路徑
+  requestDraw();
+}
+function resetAll() {
+  app.state = 0; app.start = app.end = app.result = app.steps = null;
+  app.pathStations = new Set(); app.pathSegs = new Set(); app.keyStations = new Set();
+  startInput.value = ''; endInput.value = ''; endInput.disabled = true; endInput.placeholder = '請先選擇起站';
+  fillList(endList, null);
+  hint.textContent = '';
+  renderResult();
+  fitView();
+}
+function onStationClick(s) {
+  if (app.state === 0) setStart(s);
+  else if (app.state === 1) { if (s !== app.start) setEnd(s); }
+  else setStart(s);                                     // 狀態 2：點其他站 → 全新起站
+}
+
+/* ---- 輸入框 ---- */
+const startInput = document.getElementById('startInput'), endInput = document.getElementById('endInput');
+const startList = document.getElementById('startList'), endList = document.getElementById('endList');
+const hint = document.getElementById('hint'), resultEl = document.getElementById('result');
+const SORTED = [...STATIONS].sort((a, b) => a.localeCompare(b, 'zh-Hant-TW'));
+function fillList(el, exclude) {
+  el.innerHTML = '';
+  for (const s of SORTED) if (s !== exclude) { const o = document.createElement('option'); o.value = s; el.appendChild(o); }
+}
+const ALIAS = { '台北101': '台北101/世貿', '世貿': '台北101/世貿', '101': '台北101/世貿', '廣慈': '廣慈/奉天宮', '奉天宮': '廣慈/奉天宮',
+  '北車': '台北車站', '台北': '台北車站', '台北車': '台北車站', '小巨蛋': '台北小巨蛋', '動物園站': '動物園' };
+function resolveName(v) {
+  v = (v || '').trim().replace(/臺/g, '台').replace(/^捷運/, '');
+  if (!v) return null;
+  if (stationData[v]) return v;
+  if (ALIAS[v]) return ALIAS[v];
+  const t = v.replace(/站$/, '');
+  if (stationData[t]) return t;
+  if (ALIAS[t]) return ALIAS[t];
+  return null;
+}
+function onStartInput(commit) {
+  const s = resolveName(startInput.value);
+  if (s) { if (s !== app.start) setStart(s, { fromInput: true }); if (commit) startInput.value = s; }
+  else if (!startInput.value.trim() && app.state !== 0) resetAll();
+}
+function onEndInput(commit) {
+  const s = resolveName(endInput.value);
+  if (s && s !== app.start) { if (s !== app.end) setEnd(s, { fromInput: true }); if (commit) endInput.value = s; }
+  else if (commit && endInput.value && s === app.start) { hint.textContent = '終點不可與起點相同。'; }
+}
+startInput.addEventListener('input', () => onStartInput(false));
+startInput.addEventListener('change', () => onStartInput(true));
+startInput.addEventListener('keydown', e => { if (e.key === 'Enter') onStartInput(true); });
+endInput.addEventListener('input', () => onEndInput(false));
+endInput.addEventListener('change', () => onEndInput(true));
+endInput.addEventListener('keydown', e => { if (e.key === 'Enter') onEndInput(true); });
+document.getElementById('resetBtn').onclick = resetAll;
+
+/* ---- 結果面板 ---- */
+const halfMin = sec => Math.max(0.5, Math.round(sec / 30) / 2);          // 以半分鐘為單位
+const fmtMin = sec => String(halfMin(sec));
+const pill = l => `<span class="pill" style="background:${LINE_INFO[l].color};${l === 'Y' || l === 'GX' ? 'color:#3a3200' : ''}">${LINE_INFO[l].name}</span>`;
+function renderResult() {
+  if (app.state !== 2 || !app.steps) { resultEl.innerHTML = ''; return; }
+  const rideSec = app.steps.filter(s => s.kind === 'ride').reduce((a, s) => a + s.sec, 0);
+  const walkSec = app.steps.filter(s => s.kind === 'walk').reduce((a, s) => a + s.sec, 0);
+  const nTransfer = app.steps.filter(s => s.kind === 'walk').length;
+  let html = `<div class="total"><span class="num">${fmtMin(app.result.seconds)}</span><span class="unit">分鐘</span>
+    <span class="sub">乘車 ${walkSec ? halfMin(app.result.seconds) - halfMin(walkSec) : fmtMin(app.result.seconds)} 分${walkSec ? ` ＋ 轉乘步行 ${fmtMin(walkSec)} 分` : ''}<br>${nTransfer ? `轉乘 ${nTransfer} 次` : '免轉乘直達'} · 共 ${app.steps.filter(s => s.kind === 'ride').reduce((a, s) => a + s.stations.length - 1, 0)} 站</span></div><ol class="steps">`;
+  app.steps.forEach((st, i) => {
+    if (st.kind === 'ride') {
+      const c = LINE_INFO[st.line].color;
+      const verb = i === 0 ? '於' : '轉乘';
+      html += `<li class="step" style="--c:${c}"><span class="ic"></span>${verb} <b>${st.stations[0]}</b> 搭乘 ${pill(st.line)}<br>往 <b>${st.dir}</b> 方向，搭 ${st.stations.length - 1} 站至 <b>${st.stations[st.stations.length - 1]}</b> <span class="meta">（約 ${fmtMin(st.sec)} 分）</span></li>`;
+    } else {
+      const m = fmtMin(st.sec);
+      html += st.outside
+        ? (st.from === st.to
+          ? `<li class="step walk"><span class="ic"></span>在 <b>${st.from}</b> 出站，站外轉乘${LINE_INFO[st.toLine].name} <span class="meta">（步行約 ${m} 分）</span></li>`
+          : `<li class="step walk"><span class="ic"></span><b>${st.from}</b> 出站，步行至 <b>${st.to}</b> 站外轉乘 <span class="meta">（步行約 ${m} 分）</span></li>`)
+        : `<li class="step walk"><span class="ic"></span>在 <b>${st.from}</b> 站內轉乘${st.from === '大橋頭' ? '（支線換車）' : ''} <span class="meta">（步行約 ${m} 分）</span></li>`;
+    }
+  });
+  html += `<li class="step" style="--c:#dc2626"><span class="ic"></span>抵達 <b>${app.end}</b></li></ol>`;
+  resultEl.innerHTML = html;
+}
+function renderLegend() {
+  const el = document.getElementById('legend'); const seen = new Set(); let h = '';
+  for (const l of ['BR', 'R', 'G', 'O', 'BL', 'Y', 'RN', 'GX']) {
+    const key = l === 'O' ? 'OL' : l; if (seen.has(key)) continue; seen.add(key);
+    h += `<span><i style="background:${LINE_INFO[key].color}"></i>${LINE_INFO[key].name}</span>`;
+  }
+  h += `<span><i style="background:repeating-linear-gradient(90deg,#888 0 3px,transparent 3px 6px)"></i>站外轉乘</span>`;
+  el.innerHTML = h;
+}
+
+/* ===================================================================
+ * 6. 繪圖
+ * =================================================================== */
+let drawQueued = false;
+function requestDraw() { if (!drawQueued) { drawQueued = true; requestAnimationFrame(draw); } }
+function tracePts(pts) { ctx.beginPath(); pts.forEach(([x, y], i) => { const [sx, sy] = toScreen(x, y); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }); }
+
+function draw(t) {
+  drawQueued = false;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = '#f4f5f7'; ctx.fillRect(0, 0, W, H);
+  const k = view.scale, active = app.state === 2;
+  const lw = Math.max(2.5, k * 0.15);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  // 站外轉乘：膠囊背景 + 虛線
+  for (const [a, b] of OUTSIDE_PAIRS) {
+    if (a === b) {                                     // 同站名站外轉乘（如板橋）：虛線圓環
+      if (OUTSIDE_PAIRS.findIndex(p => p[0] === a && p[1] === a) !== OUTSIDE_PAIRS.findIndex(p => p[0] === a)) continue;
+      const [x, y] = toScreen(stationData[a].x, stationData[a].y);
+      const on = !active || app.keyStations.has(a) && app.pathStations.has(a);
+      const R = Math.max(10, k * 0.45);
+      ctx.globalAlpha = on ? 1 : 0.15;
+      ctx.fillStyle = 'rgba(120,130,150,.18)'; ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = Math.max(1.5, k * 0.06); ctx.strokeStyle = active && on ? '#333' : '#8a93a3';
+      ctx.setLineDash([Math.max(3, k * 0.12), Math.max(3, k * 0.12)]);
+      ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      continue;
+    }
+    if (a > b) continue;
+    const pa = toScreen(stationData[a].x, stationData[a].y), pb = toScreen(stationData[b].x, stationData[b].y);
+    const on = !active || app.keyStations.has(a) && app.keyStations.has(b) && app.pathStations.has(a);
+    ctx.globalAlpha = on ? 1 : 0.15;
+    ctx.lineWidth = Math.max(16, k * 0.75); ctx.strokeStyle = 'rgba(120,130,150,.18)';
+    ctx.beginPath(); ctx.moveTo(...pa); ctx.lineTo(...pb); ctx.stroke();
+    ctx.lineWidth = Math.max(1.5, k * 0.06); ctx.strokeStyle = active && on ? '#333' : '#8a93a3';
+    ctx.setLineDash([Math.max(3, k * 0.12), Math.max(3, k * 0.12)]);
+    ctx.beginPath(); ctx.moveTo(...pa); ctx.lineTo(...pb); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // 路線
+  for (const pass of active ? [0, 1] : [0]) {
+    for (const seg of drawSegments) {
+      const key = [seg.a, seg.b].sort().join('|') + '|' + seg.group;
+      const onPath = app.pathSegs.has(key);
+      if (active && (pass === 0) === onPath) continue;
+      ctx.globalAlpha = active && !onPath ? 0.13 : 1;
+      if (onPath) { ctx.strokeStyle = 'rgba(0,0,0,.22)'; ctx.lineWidth = lw * 2 + 4; tracePts(seg.pts); ctx.stroke(); }
+      ctx.strokeStyle = LINE_INFO[seg.line].color;
+      ctx.lineWidth = onPath ? lw * 2 : lw;
+      tracePts(seg.pts); ctx.stroke();
+    }
+  }
+
+  // 站點
+  for (const s of STATIONS) {
+    const p = stationData[s], [x, y] = toScreen(p.x, p.y);
+    const on = !active || app.pathStations.has(s);
+    const inter = isInterchange(s);
+    let r = stationRadius(s);
+    if (active && on) r *= inter || app.keyStations.has(s) ? 1.35 : 1.15;
+    ctx.globalAlpha = on ? 1 : 0.18;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.lineWidth = inter ? Math.max(1.8, k * 0.07) : Math.max(1.5, k * 0.06);
+    ctx.strokeStyle = inter ? '#2b2f36' : LINE_INFO[stationLines[s][0]].color;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // 起訖標記 + 脈衝
+  const now = performance.now();
+  let animate = false;
+  const mark = (s, color, pulse) => {
+    if (!s) return;
+    const [x, y] = toScreen(stationData[s].x, stationData[s].y);
+    const r = stationRadius(s) * 1.4 + 2;
+    if (pulse) {
+      animate = true;
+      for (const off of [0, 0.5]) {
+        const ph = ((now / 1400) + off) % 1;
+        ctx.globalAlpha = (1 - ph) * 0.55; ctx.strokeStyle = color; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(x, y, r + ph * Math.max(18, k * 0.9), 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke();
+  };
+  mark(app.start, '#16a34a', app.state >= 1);
+  mark(app.end, '#dc2626', app.state === 2);
+
+  // 站名
+  const fs = Math.max(11, Math.min(18, k * 0.42));
+  for (const s of STATIONS) {
+    const isKey = app.keyStations.has(s);
+    if (active && !isKey) continue;                     // 標籤減量
+    const p = stationData[s], [x, y] = toScreen(p.x, p.y);
+    const r = stationRadius(s) + (isKey ? 6 : 3);
+    const dx = p.align === 'left' ? r : p.align === 'right' ? -r : 0;
+    const dy = p.baseline === 'bottom' ? -r : p.baseline === 'top' ? r : 0;
+    const f = isKey ? fs * 1.25 : fs;
+    ctx.font = `${isKey || isInterchange(s) ? 700 : 500} ${f}px "Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif`;
+    ctx.textAlign = p.align; ctx.textBaseline = p.baseline;
+    ctx.lineWidth = isKey ? 5 : 3.5; ctx.strokeStyle = 'rgba(244,245,247,.95)';
+    ctx.strokeText(s, x + dx, y + dy);
+    ctx.fillStyle = s === app.start ? '#15803d' : s === app.end ? '#b91c1c' : '#1d2330';
+    ctx.fillText(s, x + dx, y + dy);
+  }
+  if (animate) requestDraw();
+}
+
+/* ===================================================================
+ * 7. 啟動
+ * =================================================================== */
+fillList(startList, null); fillList(endList, null); renderLegend();
+window.addEventListener('resize', () => { resize(); fitView(); });
+resize(); fitView();
+</script>
+</body>
+</html>
